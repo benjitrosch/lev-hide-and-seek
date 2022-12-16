@@ -4,21 +4,38 @@ const io = require("socket.io-client")
 const GAME_WIDTH = 1280
 const GAME_HEIGHT = 720
 
-const WORLD_WIDTH = 7833
-const WORLD_HEIGHT = 4524
+const WORLD_WIDTH = 7680
+const WORLD_HEIGHT = 4320
+
+const TILE_SIZE = 160
 
 const ANIM_FRAMERATE = 0.041
 
+const INTERACT_DISTANCE = 256
 const SEEK_SPEED = 480
 const HIDE_SPEED = 512  
 
-const INTERACT_DISTANCE = 256
-
 const PLAYER_WIDTH = 96
 const PLAYER_HEIGHT = 128
+const PLAYER_COLLIDER_SIZE = 64
+const PLAYER_COLLIDER_OFFSET = 16
 
-const CLIENTSIDE_DISTANCE_CORRECTION_THRESHOLD = 48
+const CLIENTSIDE_DISTANCE_CORRECTION_THRESHOLD = 16
 /////////////////
+
+/// utility functions ///
+
+/** linear interpolate (ease) towards position */
+const lerp = (a: number, b: number, alpha: number) => a + alpha * (b - a)
+
+/** 2d vector distance method */
+const dist = (a: { x: number, y: number }, b: { x: number, y: number }) => {
+    const v0 = a.x - b.x
+    const v1 = a.y - b.y
+    return Math.sqrt((v0 * v0) + (v1 * v1))
+}
+
+/////////////////////////
 
 class SocketManager {
     private static _instance: SocketManager
@@ -39,8 +56,8 @@ class SocketManager {
         this.socket.on('connect', () => {
             // add self to entity manager and
             // emit 'join' socket event
-            const x = 2048 + Math.random() * 256
-            const y = 2048 + Math.random() * 256
+            const x = 256 + Math.random() * 256
+            const y = 256 + Math.random() * 256
             this.socket.emit('join', { name: "Benji", x, y })
             EntityManager.instance.addEntity(
                 this.socketId,
@@ -72,30 +89,31 @@ class SocketManager {
             }
         })
 
-        // get player inputs from server
+        // get player inputs from server to
+        // simulate smooth client side movement
         this.socket.on('updateInputs', (inputs) => {
             for (let id in inputs) {
                 if (id in EntityManager.instance.entities) {
-                    const { keys } = inputs[id]
-                    EntityManager.instance.entities[id].keys = keys
+                    EntityManager.instance.entities[id].keys = inputs[id]
                 }
             }
         })
 
-        // get position calculated from server for authoritative sync
+        // get position calculated from server to
+        // keep players synced and server authoritative
         this.socket.on('updatePositions', (positions) => {
             for (let id in positions) {
                 if (id in EntityManager.instance.entities) {
                     const { x, y } = positions[id]
                     const player = EntityManager.instance.entities[id]
 
-                    const v0 = player.x - x
-                    const v1 = player.y - y
-                    const distance = Math.sqrt((v0 * v0) + (v1 * v1))
+                    const distance = dist({ x: player.x, y: player.y }, { x, y })
 
-                    if (id !== this.socketId || distance > CLIENTSIDE_DISTANCE_CORRECTION_THRESHOLD) {
-                        player.x = x
-                        player.y = y
+                    // if the diff between client and server pos is beyond threshold,
+                    // lerp towards the correct version (so we don't jump)
+                    if (distance > CLIENTSIDE_DISTANCE_CORRECTION_THRESHOLD) {
+                        player.x = lerp(player.x, x, 0.1)
+                        player.y = lerp(player.y, y, 0.1)
                     }
                 }
             }
@@ -108,7 +126,7 @@ class SocketManager {
  * on a fixed 60fps timstep
  */
 abstract class Game {
-    private gfx: Renderer
+    protected gfx: Renderer
 
     private static readonly TIMESTEP = 1000 / 60
     private previousTime = 0
@@ -118,14 +136,9 @@ abstract class Game {
         this.gfx = new Renderer(ctx)
     }
 
-    /**
-     * call to begin the game loop
-     */
-    public start() {
-        this.run(performance.now())
-    }
-
-    protected run(currentTime: number) {
+    
+    /** call to begin the game loop */
+    public run(currentTime: number = performance.now()) {
         this.accumulatedTime += (currentTime - this.previousTime)
         this.previousTime = currentTime
         
@@ -133,10 +146,13 @@ abstract class Game {
             this.update(Game.TIMESTEP * .001)
             this.accumulatedTime -= Game.TIMESTEP
         }
-    
+        
         this.draw(this.gfx)
         requestAnimationFrame(this.run.bind(this, performance.now()))
     }
+    
+    /** initialize game */
+    public abstract start()
 
     /**
      * updates game logic once per frame
@@ -352,7 +368,7 @@ class Background {
     private sprite: Sprite
 
     constructor() {
-        this.sprite = new Sprite('map.jpeg')
+        this.sprite = new Sprite('sprites/map.jpeg')
     }
 
     public draw(gfx: Renderer, xView: number, yView: number) {
@@ -370,6 +386,107 @@ class Background {
     }
 }
 
+type LevelData = {
+    title: string
+    width: number
+    height: number
+    startX: number
+    startY: number
+    blocks: number[]
+}
+
+class Level extends Asset {
+    public title: string = 'undefined_level'
+
+    public width: number = 0
+    public height: number = 0
+
+    public get rows() {
+        return ~~(this.width / TILE_SIZE)
+    }
+
+    public get cols() {
+       return (this.height / TILE_SIZE)
+    }
+
+    public startX: number = 0
+    public startY: number = 0
+
+    public blocks: boolean[] = []
+
+    public loaded: boolean = false
+
+    constructor(filePath: string) {
+        super(filePath)
+    }
+
+    // Load JSON lvl data
+    public async Load(gfx: Renderer) {    
+        await fetch(this.filePath)
+            .then((res) => res.json())
+            .then((data: LevelData) => {
+                const { title, width, height, startX, startY, blocks } = data
+
+                this.title = title
+                
+                this.width = width
+                this.height = height
+
+                this.startX = startX
+                this.startY = startY
+        
+                this.blocks = blocks.map((b) => !!b)
+
+                this.loaded = true
+            })
+    }
+
+    public draw(gfx: Renderer, xView: number, yView: number) {
+        if (!this.loaded) return
+
+        let w = GAME_WIDTH
+	    let h = GAME_HEIGHT
+
+	    if (this.width * TILE_SIZE - xView < w)
+	        w = this.width * TILE_SIZE - xView
+	    if (this.height * TILE_SIZE - yView < h)
+	        h = this.height * TILE_SIZE - yView
+
+        const startX = Math.max(0, ~~(xView / TILE_SIZE))
+        const startY = Math.max(0, ~~(yView / TILE_SIZE))
+        
+        const endX = Math.min(this.rows, startX + w / TILE_SIZE + 1)
+        const endY = Math.min(this.cols, startY + h / TILE_SIZE + 1)
+
+        for (let y = startY; y < endY; y++) {
+            for (let x = startX; x < endX; x++) {
+                const block = this.blocks[x + y * this.rows]
+
+                if (block) {
+                    gfx.ctx.save()
+                    gfx.ctx.fillStyle = "red"
+                    gfx.ctx.strokeStyle = "red"
+                    gfx.ctx.lineWidth = 1
+                    gfx.ctx.beginPath()
+                    gfx.ctx.rect(
+                        x * TILE_SIZE - xView,
+                        y * TILE_SIZE - yView,
+                        1 * TILE_SIZE,
+                        1 * TILE_SIZE
+                    )
+                    gfx.ctx.fill()
+                    gfx.ctx.stroke()
+                    gfx.ctx.restore()
+                }
+            }
+        }
+    }
+
+    public check(x: number, y: number) {
+        return this.blocks[x + y * this.rows]
+    }
+}
+
 /** basic 2d camera to define viewport bounds */
 class Camera {
     public xView: number = 0
@@ -380,15 +497,10 @@ class Camera {
         this.yView = yView
     }
 
-    // linear interpolate (ease) towards position
-    private lerp(a: number, b: number, alpha: number) {
-        return a + alpha * (b - a)
-    }
-
     // center the camera viewport on a position
     public lookAt(x: number, y: number) {
-        this.xView = this.lerp(this.xView, x - GAME_WIDTH / 2, 0.1)
-        this.yView = this.lerp(this.yView, y - GAME_HEIGHT / 2, 0.1)
+        this.xView = lerp(this.xView, x - GAME_WIDTH / 2, 0.1)
+        this.yView = lerp(this.yView, y - GAME_HEIGHT / 2, 0.1)
 
         this.clamp()
     }
@@ -456,6 +568,8 @@ class EntityManager {
     
     public entities: Entities = {}
 
+    public level: Level | null = null
+
     public get player(): Player | null {
         return this.entities[SocketManager.instance.socketId]
     }
@@ -484,12 +598,23 @@ class EntityManager {
         if (socketId in this.entities)
             delete this.entities[socketId]
     }
+
+    public setLevel(level: Level) {
+        this.level = level
+    }
 }
 
 enum Role {
     HIDE = "hide",
     SEEK = "seek",
     SPEC = "spectate"
+}
+
+enum Inputs {
+    LEFT    = 1,
+    RIGHT   = 2,
+    UP      = 4,
+    DOWN    = 8,
 }
 
 class Player {
@@ -503,8 +628,9 @@ class Player {
     private speed: number = HIDE_SPEED
 
     // keyboard events
-    public keys: { left: boolean, right: boolean, up: boolean, down: boolean, action: boolean }
-    private hasPressed: boolean = false
+    public keys: number = 0
+    private actionDown: boolean = false
+    private hasPressedKey: boolean = false
     private hasPressedAction: boolean = false
 
     // animation
@@ -522,7 +648,9 @@ class Player {
     }
 
     // collision
-    public aabb: AABB
+    get aabb() {
+        return new AABB(this.x + PLAYER_COLLIDER_OFFSET, this.y + PLAYER_COLLIDER_SIZE, PLAYER_COLLIDER_SIZE, PLAYER_COLLIDER_SIZE)
+    }
 
     // interact
     public target: Player | null = null
@@ -558,63 +686,103 @@ class Player {
         //     ' ': false, e: false
         // }
 
-        this.keys = {
-            left: false,
-            right: false,
-            up: false,
-            down: false,
-            action: false,
-        }
-
         if (this.player) {
             document.onkeydown = (e) => this.keyDown(e)
             document.onkeyup = (e) => this.keyUp(e)
         }
 
         this.animator = new Animator("idle", {
-            idle: [new Sprite("idle.png"),],
+            idle: [new Sprite("sprites/idle.png"),],
             walk: [
-                new Sprite("Walk0001.png"),
-                new Sprite("Walk0002.png"),
-                new Sprite("Walk0003.png"),
-                new Sprite("Walk0004.png"),
-                new Sprite("Walk0005.png"),
-                new Sprite("Walk0006.png"),
-                new Sprite("Walk0007.png"),
-                new Sprite("Walk0008.png"),
-                new Sprite("Walk0009.png"),
-                new Sprite("Walk0010.png"),
-                new Sprite("Walk0011.png"),
-                new Sprite("Walk0012.png"),
+                new Sprite("sprites/Walk0001.png"),
+                new Sprite("sprites/Walk0002.png"),
+                new Sprite("sprites/Walk0003.png"),
+                new Sprite("sprites/Walk0004.png"),
+                new Sprite("sprites/Walk0005.png"),
+                new Sprite("sprites/Walk0006.png"),
+                new Sprite("sprites/Walk0007.png"),
+                new Sprite("sprites/Walk0008.png"),
+                new Sprite("sprites/Walk0009.png"),
+                new Sprite("sprites/Walk0010.png"),
+                new Sprite("sprites/Walk0011.png"),
+                new Sprite("sprites/Walk0012.png"),
             ],
         })
-
-        this.aabb = new AABB(16, 64, 64, 64)
     }
-
+    
     public update(dt: number) {
         // step animation state
         this.animator.update(dt)
 
         // move player
         const dir = { x: 0, y: 0 }
-        dir.x = (-this.keys.left + +this.keys.right)
-        dir.y = (-this.keys.up + +this.keys.down)
+        dir.x = (-(!!(this.keys & Inputs.LEFT)) + +(!!(this.keys & Inputs.RIGHT)))
+        dir.y = (-(!!(this.keys & Inputs.UP)) + +(!!(this.keys & Inputs.DOWN)))
 
         if (!!dir.x) this.facing = dir.x > 0
 
         if (!!dir.x || !!dir.y) this.animator.setAnimation("walk")
         else this.animator.setAnimation("idle")
 
-        if (this.player) {
-            if (+dir.x && +dir.y) {
-                const dirLength = Math.sqrt(dir.x * dir.x + dir.y * dir.y)
-                dir.x /= dirLength
-                dir.y /= dirLength
-            }
+        if (+dir.x && +dir.y) {
+            const dirLength = Math.sqrt(dir.x * dir.x + dir.y * dir.y)
+            dir.x /= dirLength
+            dir.y /= dirLength
+        }
 
-            this.x += dir.x * this.speed * dt 
-            this.y += dir.y * this.speed * dt 
+        const dX = dir.x * this.speed * dt 
+        const dY = dir.y * this.speed * dt 
+
+        const level = EntityManager.instance.level
+        if (level) {
+            // horizontal collision resolution
+            if (Math.abs(dX) > 0)
+            {
+                const collider = this.aabb.translate(dX, 0)
+
+                const topLeft  = { x: ~~( collider.x                / TILE_SIZE), y: ~~( collider.y                / TILE_SIZE) }
+                const topRight = { x: ~~((collider.x + collider.w)  / TILE_SIZE), y: ~~( collider.y                / TILE_SIZE) }
+                const botLeft  = { x: ~~( collider.x                / TILE_SIZE), y: ~~((collider.y + collider.h) / TILE_SIZE) }
+                const botRight = { x: ~~((collider.x + collider.w)  / TILE_SIZE), y: ~~((collider.y + collider.h) / TILE_SIZE) }
+
+                const colliding = (
+                    level.check(topLeft.x, topLeft.y) ||
+                    level.check(topRight.x, topRight.y) || 
+                    level.check(botLeft.x, botLeft.y) || 
+                    level.check(botRight.x, botRight.y)
+                )
+
+                if (colliding) {
+                    if (Math.sign(dX) === 1) this.x = topLeft.x * TILE_SIZE + collider.w + PLAYER_COLLIDER_OFFSET - 1
+                    else this.x = topRight.x * TILE_SIZE - PLAYER_COLLIDER_OFFSET
+                } else this.x += dX
+            }
+            
+            // vertical collision resolution
+            if (Math.abs(dY) > 0)
+            {
+                const collider = this.aabb.translate(0, dY)
+
+                const topLeft  = { x: ~~( collider.x                / TILE_SIZE), y: ~~( collider.y                / TILE_SIZE) }
+                const topRight = { x: ~~((collider.x + collider.w)  / TILE_SIZE), y: ~~( collider.y                / TILE_SIZE) }
+                const botLeft  = { x: ~~( collider.x                / TILE_SIZE), y: ~~((collider.y + collider.h) / TILE_SIZE) }
+                const botRight = { x: ~~((collider.x + collider.w)  / TILE_SIZE), y: ~~((collider.y + collider.h) / TILE_SIZE) }
+
+                const colliding = (
+                    level.check(topLeft.x, topLeft.y) ||
+                    level.check(topRight.x, topRight.y) || 
+                    level.check(botLeft.x, botLeft.y) || 
+                    level.check(botRight.x, botRight.y)
+                )
+
+                if (colliding) {
+                    if (Math.sign(dY) === 1) this.y = topLeft.y * TILE_SIZE + PLAYER_COLLIDER_SIZE / 2 - 1
+                    else this.y = botLeft.y * TILE_SIZE - PLAYER_COLLIDER_SIZE
+                } else this.y += dY
+            }
+        } else {
+            this.x += dX
+            this.y += dY
         }
 
         // check for closest nearby interactive entity
@@ -625,9 +793,7 @@ class Player {
                 const e = EntityManager.instance.entities[id]
                 const [x, y] = e.center
 
-                const v0 = this.x - x
-                const v1 = this.y - y
-                const distance = Math.sqrt((v0 * v0) + (v1 * v1))
+                const distance = dist({ x: this.x, y: this.y }, { x, y })
 
                 if (distance < min) {
                     min = distance
@@ -705,8 +871,8 @@ class Player {
         )
 
         gfx.emptyRectangle(
-            this.aabb.x + this.x - xView,
-            this.aabb.y + this.y - yView,
+            this.aabb.x - xView,
+            this.aabb.y - yView,
             this.aabb.w,
             this.aabb.h,
             2,
@@ -715,43 +881,43 @@ class Player {
     }
 
     private keyDown(e: KeyboardEvent) {
-        e.preventDefault()
+        // e.preventDefault()
 
         switch (e.key) {
             case 'a':
             case 'ArrowLeft':
-                if (!this.keys.left) this.hasPressed = true
-                this.keys.left = true
+                if (!(this.keys & Inputs.LEFT)) this.hasPressedKey = true
+                this.keys |= Inputs.LEFT
                 break
 
             case 'd':
             case 'ArrowRight':
-                if (!this.keys.right) this.hasPressed = true
-                this.keys.right = true
+                if (!(this.keys & Inputs.RIGHT)) this.hasPressedKey = true
+                this.keys |= Inputs.RIGHT
                 break
 
             case 'w':
             case 'ArrowUp':
-                if (!this.keys.up) this.hasPressed = true
-                this.keys.up = true
+                if (!(this.keys & Inputs.UP)) this.hasPressedKey = true
+                this.keys |= Inputs.UP
                 break
 
             case 's':
             case 'ArrowDown':
-                if (!this.keys.down) this.hasPressed = true
-                this.keys.down = true
+                if (!(this.keys & Inputs.DOWN)) this.hasPressedKey = true
+                this.keys |= Inputs.DOWN
                 break
 
             case ' ':
             case 'e':
-                if (!this.keys.action) this.hasPressedAction = true
-                this.keys.action = true
+                if (!this.actionDown) this.hasPressedAction = true
+                this.actionDown = true
                 break
         }
 
-        if (this.hasPressed) {
+        if (this.hasPressedKey) {
             SocketManager.instance.socket.emit('input', this.keys)
-            this.hasPressed = false
+            this.hasPressedKey = false
         }
     }
 
@@ -759,27 +925,27 @@ class Player {
         switch (e.key) {
             case 'a':
             case 'ArrowLeft':
-                this.keys.left = false
+                this.keys &= ~Inputs.LEFT
                 break
 
             case 'd':
             case 'ArrowRight':
-                this.keys.right = false
+                this.keys &= ~Inputs.RIGHT
                 break
 
             case 'w':
             case 'ArrowUp':
-                this.keys.up = false
+                this.keys &= ~Inputs.UP
                 break
 
             case 's':
             case 'ArrowDown':
-                this.keys.down = false
+                this.keys &= ~Inputs.DOWN
                 break
 
             case ' ':
             case 'e':
-                this.keys.action = false
+                this.actionDown = false
                 break
         }
 
@@ -796,15 +962,24 @@ window.onload = function () {
     canvas.width = GAME_WIDTH
     canvas.height = GAME_HEIGHT
     canvas.style.background = "black"
+    canvas.style.imageRendering = 'pixelated'
     const ctx = canvas.getContext('2d')
-
-    SocketManager.instance.init()
+    ctx.imageSmoothingEnabled = false
 
     const cam = new Camera(0, 0)
     const bg = new Background()
+
+    const lvl = new Level("maps/lvl0.json")
     
     class Amogus extends Game {
         public debug: boolean = true
+
+        public start() {
+            SocketManager.instance.init()
+
+            lvl.Load(this.gfx)
+            EntityManager.instance.setLevel(lvl)
+        }
         
         protected update(dt: number) {
             EntityManager.instance.update(dt)
@@ -820,6 +995,7 @@ window.onload = function () {
             gfx.clearScreen()
 
             bg.draw(gfx, cam.xView, cam.yView)
+            lvl.draw(gfx, cam.xView, cam.yView)
             
             EntityManager.instance.draw(gfx, cam.xView, cam.yView)
 
@@ -846,8 +1022,14 @@ window.onload = function () {
             const posText = `x: ${Math.round(player.x)}, y: ${Math.round(player.y)}`
             const [posW, posH] = gfx.measureText(posText, 24)
             gfx.text(posText, 8, socketH + roleH + posH, "white", "left", 24)
+
+            // num players
+            const playersText = `${Object.keys(EntityManager.instance.entities).length} players`
+            gfx.textOutline(playersText, GAME_WIDTH / 2, GAME_HEIGHT - 16, "yellow", "black", "left", 32, 4)
         }
     }
 
-    new Amogus(ctx).start()
+    const game = new Amogus(ctx)
+    game.start()
+    game.run()
 }
