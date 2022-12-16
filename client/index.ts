@@ -1,3 +1,5 @@
+const io = require("socket.io-client")
+
 /// CONSTANTS ///
 const GAME_WIDTH = 1280
 const GAME_HEIGHT = 720
@@ -11,7 +13,95 @@ const SEEK_SPEED = 480
 const HIDE_SPEED = 512  
 
 const INTERACT_DISTANCE = 256
+
+const PLAYER_WIDTH = 96
+const PLAYER_HEIGHT = 128
+
+const CLIENTSIDE_DISTANCE_CORRECTION_THRESHOLD = 48
 /////////////////
+
+class SocketManager {
+    private static _instance: SocketManager
+    public static get instance() {
+        return this._instance || (this._instance = new this())
+    }
+
+    public socket//: Socket<ServerToClientEvents, ClientToServerEvents>
+
+    public get socketId() {
+        return this.socket.id
+    }
+
+    public init() {
+        this.socket = io()
+
+        // connect to lobby
+        this.socket.on('connect', () => {
+            // add self to entity manager and
+            // emit 'join' socket event
+            const x = 2048 + Math.random() * 256
+            const y = 2048 + Math.random() * 256
+            this.socket.emit('join', { name: "Benji", x, y })
+            EntityManager.instance.addEntity(
+                this.socketId,
+                new Player(true, "Benji", this.socketId, x, y)
+            )
+        })
+
+        // get latest players in lobby
+        this.socket.on('updateLobby', (players) => {
+            const updatedPlayers: { [socketId: string]: boolean } = {}
+
+            for (let id in players) {
+                // add new players to entity manager
+                if (!(id in EntityManager.instance.entities) && id !== this.socketId) {
+                    const { name } = players[id]
+                    EntityManager.instance.addEntity(
+                        id,
+                        new Player(false, name, id, 0, 0)
+                    )
+                }
+
+                updatedPlayers[id] = true
+            }
+
+            // remove disconnected players
+            for (let id in EntityManager.instance.entities) {
+                if (!(id in updatedPlayers))
+                    EntityManager.instance.removeEntity(id)
+            }
+        })
+
+        // get player inputs from server
+        this.socket.on('updateInputs', (inputs) => {
+            for (let id in inputs) {
+                if (id in EntityManager.instance.entities) {
+                    const { keys } = inputs[id]
+                    EntityManager.instance.entities[id].keys = keys
+                }
+            }
+        })
+
+        // get position calculated from server for authoritative sync
+        this.socket.on('updatePositions', (positions) => {
+            for (let id in positions) {
+                if (id in EntityManager.instance.entities) {
+                    const { x, y } = positions[id]
+                    const player = EntityManager.instance.entities[id]
+
+                    const v0 = player.x - x
+                    const v1 = player.y - y
+                    const distance = Math.sqrt((v0 * v0) + (v1 * v1))
+
+                    if (id !== this.socketId || distance > CLIENTSIDE_DISTANCE_CORRECTION_THRESHOLD) {
+                        player.x = x
+                        player.y = y
+                    }
+                }
+            }
+        })
+    }
+}
 
 /**
  * gore game loop to call update and draw methods
@@ -127,6 +217,32 @@ class Renderer {
         this.ctx.fillStyle = color
         this.ctx.fillText(text, x, y)        
     }
+
+    public textOutline(
+        text: string,
+        x: number,
+        y: number,
+        color = "white",
+        outline = "black",
+        align = "center",
+        size = 16,
+        thickness = 8,
+        font: Font | null = null
+    ) {        
+        if (font != null)
+          this.ctx.font = font.name
+        
+        this.fontSize(this.ctx.font, size)
+        
+        this.ctx.textAlign = align as CanvasTextAlign
+
+        this.ctx.strokeStyle = outline
+        this.ctx.lineWidth = thickness
+        this.ctx.strokeText(text, x, y)
+        
+        this.ctx.fillStyle = color
+        this.ctx.fillText(text, x, y)        
+    }
   
     public fontSize(font: string, size: number) {
         this.ctx.font = font.replace(/\d+px/, `${size}px`)
@@ -139,7 +255,7 @@ class Renderer {
         this.fontSize(this.ctx.font, size)
         const metrics = this.ctx.measureText(text)
         this.ctx.restore()
-        return [metrics.width, metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent]
+        return [metrics.width, metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent]
     }
 }
   
@@ -150,7 +266,7 @@ abstract class Asset {
     public fileName: string
   
     constructor(filePath: string) {
-        this.filePath = `./assets/${filePath}`
+        this.filePath = `./public/${filePath}`
   
         const directories = filePath.split('/')
         this.fileName = directories[directories.length - 1] ?? filePath
@@ -330,62 +446,72 @@ class AABB {
     }
 }
 
-type Constructor<T> = abstract new (...args: any[]) => T
+type Entities = { [socketId: string]: Player }
 
 class EntityManager {
     private static _instance: EntityManager
-    public static get Instance() {
+    public static get instance() {
         return this._instance || (this._instance = new this())
     }
     
-    private entities: Entity[]
+    public entities: Entities = {}
 
-    private addQueue: Entity[]
-    private removeQueue: Entity[]
-  
-    constructor() {
-        this.entities = []
-
-        this.addQueue = []
-        this.removeQueue = []
+    public get player(): Player | null {
+        return this.entities[SocketManager.instance.socketId]
     }
-  
-    public update(dt: number) {
-        this.entities.forEach((entity) => entity.update(dt))
-  
-        this.entities = this.entities.filter(
-            (entity) => !this.removeQueue.map((r) => r.uuid).includes(entity.uuid)
-        )
-        this.entities = this.entities.concat(this.addQueue)
 
-        this.addQueue = []
-        this.removeQueue = []
+    public update(dt: number) {
+        Object.values(this.entities)
+            .forEach((entity) => entity.update(dt))
     }
   
     public draw(gfx: Renderer, xView: number, yView: number) {
-        this.entities.forEach((entity) => entity.draw(gfx, xView, yView))
+        Object.values(this.entities)
+            .sort((a, b) => a.y - b.y)
+            .forEach((entity) => entity.draw(gfx, xView, yView))
     }
 
     public drawDebug(gfx: Renderer, xView: number, yView: number) {
-        this.entities.forEach((entity) => entity.drawDebug(gfx, xView, yView))
+        Object.values(this.entities)
+            .forEach((entity) => entity.drawDebug(gfx, xView, yView))
     }
   
-    public addEntity<T extends Entity>(entity: T) {
-        this.addQueue.push(entity)
+    public addEntity(socketId: string, entity: Player) {
+        this.entities[socketId] = entity
     }
   
-    public removeEntity<T extends Entity>(entity: T) {
-        this.removeQueue.push(entity)
-    }
-
-    public getOfType<T extends Entity>(type: Constructor<T>): T[] {
-        return <T[]>this.entities.filter((e) => e instanceof type)
+    public removeEntity(socketId: string) {
+        if (socketId in this.entities)
+            delete this.entities[socketId]
     }
 }
 
-abstract class Entity {
-    public uuid: string
+enum Role {
+    HIDE = "hide",
+    SEEK = "seek",
+    SPEC = "spectate"
+}
 
+class Player {
+    // online
+    public socketId: string
+    public username: string
+    
+    // status
+    public player: boolean
+    public role: Role
+    private speed: number = HIDE_SPEED
+
+    // keyboard events
+    public keys: { left: boolean, right: boolean, up: boolean, down: boolean, action: boolean }
+    private hasPressed: boolean = false
+    private hasPressedAction: boolean = false
+
+    // animation
+    private animator: Animator
+    private facing: boolean = true
+
+    // transform
     public x: number
     public y: number
     public w: number
@@ -395,72 +521,55 @@ abstract class Entity {
         return [this.x + this.w / 2, this.y + this.h / 2]
     }
 
-    constructor(x: number, y: number, w: number, h: number) {
-        this.x = x
-        this.y = y
-        this.w = w
-        this.h = h
-
-        // generate random unique identifier
-        this.uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-            const r = (Math.random() * 16) | 0, v = c == 'x' ? r : (r & 0x3) | 0x8
-            return v.toString(16)
-        })
-    }
-
-    public abstract update(dt: number)
-    public abstract draw(gfx: Renderer, xView: number, yView: number)
-    public drawDebug(gfx: Renderer, xView: number, yView: number) {}
-}
-
-enum Role {
-    HIDE = "hide",
-    SEEK = "seek",
-    SPEC = "spectate"
-}
-
-class Player extends Entity {
-    // status
-    public role: Role
-    private speed: number
-
-    // keyboard events
-    private keys: Record<string, boolean>
-
-    // animation
-    private animator: Animator
-    private facing: boolean = true
-
     // collision
     public aabb: AABB
 
     // interact
-    public target: Interactive | null = null
+    public target: Player | null = null
 
-    constructor(role: Role, x: number, y: number) {
-        super(x, y, 96, 128)
+    constructor(player: boolean, username: string, socketId: string, x: number, y: number) {
+        this.x = x
+        this.y = y
+        this.w = PLAYER_WIDTH
+        this.h = PLAYER_HEIGHT
 
-        this.role = role
-        switch (role) {
-            case Role.HIDE:
-                this.speed = HIDE_SPEED
-                break
+        this.socketId = socketId
+        this.username = username
 
-            case Role.SEEK:
-                this.speed = SEEK_SPEED
-                break
-        }
+        this.player = player
+
+        // this.role = role
+        // switch (role) {
+        //     case Role.HIDE:
+        //         this.speed = HIDE_SPEED
+        //         break
+
+        //     case Role.SEEK:
+        //         this.speed = SEEK_SPEED
+        //         break
+        // }
+
+        // this.keys = {
+        //     // movement arrows
+        //     ArrowLeft: false, ArrowRight: false, ArrowUp: false, ArrowDown: false,
+        //     // movement wasd
+        //     w: false, a: false, s: false, d: false,
+        //     // interact
+        //     ' ': false, e: false
+        // }
 
         this.keys = {
-            // movement arrows
-            ArrowLeft: false, ArrowRight: false, ArrowUp: false, ArrowDown: false,
-            // movement wasd
-            w: false, a: false, s: false, d: false,
-            // interact
-            ' ': false, e: false
+            left: false,
+            right: false,
+            up: false,
+            down: false,
+            action: false,
         }
-        document.onkeydown = (e) => this.keyDown(e)
-        document.onkeyup = (e) => this.keyUp(e)
+
+        if (this.player) {
+            document.onkeydown = (e) => this.keyDown(e)
+            document.onkeyup = (e) => this.keyUp(e)
+        }
 
         this.animator = new Animator("idle", {
             idle: [new Sprite("idle.png"),],
@@ -480,7 +589,7 @@ class Player extends Entity {
             ],
         })
 
-        this.aabb = new AABB(16 - this.w / 2, 64 - this.h / 2, 64, 64)
+        this.aabb = new AABB(16, 64, 64, 64)
     }
 
     public update(dt: number) {
@@ -489,41 +598,48 @@ class Player extends Entity {
 
         // move player
         const dir = { x: 0, y: 0 }
-        dir.x = (-(this.keys.ArrowLeft || this.keys.a) + +(this.keys.ArrowRight || this.keys.d))
-        dir.y = (-(this.keys.ArrowUp || this.keys.w) + +(this.keys.ArrowDown || this.keys.s))
+        dir.x = (-this.keys.left + +this.keys.right)
+        dir.y = (-this.keys.up + +this.keys.down)
 
         if (!!dir.x) this.facing = dir.x > 0
 
         if (!!dir.x || !!dir.y) this.animator.setAnimation("walk")
         else this.animator.setAnimation("idle")
 
-        if (+dir.x && +dir.y) {
-            const dirLength = Math.sqrt(dir.x * dir.x + dir.y * dir.y)
-            dir.x /= dirLength
-            dir.y /= dirLength
-        }
+        if (this.player) {
+            if (+dir.x && +dir.y) {
+                const dirLength = Math.sqrt(dir.x * dir.x + dir.y * dir.y)
+                dir.x /= dirLength
+                dir.y /= dirLength
+            }
 
-        this.x += dir.x * this.speed * dt 
-        this.y += dir.y * this.speed * dt 
+            this.x += dir.x * this.speed * dt 
+            this.y += dir.y * this.speed * dt 
+        }
 
         // check for closest nearby interactive entity
         this.target = null
         let min = INTERACT_DISTANCE
-        EntityManager.Instance.getOfType(Interactive).forEach((e) => {
-            const [x, y] = e.center
+        Object.keys(EntityManager.instance.entities).forEach((id) => {
+            if (id !== this.socketId) {
+                const e = EntityManager.instance.entities[id]
+                const [x, y] = e.center
 
-            const v0 = this.x - x
-            const v1 = this.y - y
-            const distance = Math.sqrt((v0 * v0) + (v1 * v1))
+                const v0 = this.x - x
+                const v1 = this.y - y
+                const distance = Math.sqrt((v0 * v0) + (v1 * v1))
 
-            if (distance < min) {
-                min = distance
-                this.target = e
+                if (distance < min) {
+                    min = distance
+                    this.target = e
+                }
             }
         })
         
-        if (!!this.target && (!!this.keys.e || !!this.keys[' ']))
+        if (!!this.target && this.hasPressedAction) {
             this.target.interact()
+            this.hasPressedAction = false
+        }
     }
 
     public draw(gfx: Renderer, xView: number, yView: number) {
@@ -536,14 +652,25 @@ class Player extends Entity {
                 // gfx.ctx.scale(-1, 1)
             }
 
+            gfx.textOutline(
+                this.username,
+                this.x + this.w / 2 - xView,
+                this.y - yView,
+                "white",
+                "black",
+                "center",
+                24,
+                4
+            )
+
             gfx.ctx.drawImage(
                 sprite.image,
                 0,
                 0,
                 sprite.image.width,
                 sprite.image.height,
-                this.x - this.w / 2 - xView,
-                this.y - this.h / 2 - yView,
+                this.x - xView,
+                this.y - yView,
                 this.w,
                 this.h
             )
@@ -553,27 +680,24 @@ class Player extends Entity {
     }
 
     public drawDebug(gfx: Renderer, xView: number, yView: number) {
+        if (!this.player) return
+
         if (this.target) {
-            const [x, y] = this.target.center
+            const [pX, pY] = this.center
+            const [tX, tY] = this.target.center
             gfx.line(
-                this.x - xView,
-                x - xView,
-                this.y  - yView,
-                y - yView,
+                pX - xView,
+                tX - xView,
+                pY  - yView,
+                tY - yView,
                 2,
                 "#00ff00"
             )
         }
-            
-        let collides = false
-        EntityManager.Instance.getOfType(TestCollider).forEach((e) => {
-            if (this.aabb.translate(this.x, this.y).check(new AABB(e.x, e.y, e.w, e.h)))
-                collides = true
-        })
 
         gfx.emptyRectangle(
-            this.x - this.w / 2 - xView,
-            this.y - this.h / 2 - yView,
+            this.x - xView,
+            this.y - yView,
             this.w,
             this.h,
             1,
@@ -586,65 +710,84 @@ class Player extends Entity {
             this.aabb.w,
             this.aabb.h,
             2,
-            collides ? "#00ff00" : "#ff0000"
+            "#ff0000"
         )
     }
 
     private keyDown(e: KeyboardEvent) {
-        this.keys[e.key] = true
+        e.preventDefault()
+
+        switch (e.key) {
+            case 'a':
+            case 'ArrowLeft':
+                if (!this.keys.left) this.hasPressed = true
+                this.keys.left = true
+                break
+
+            case 'd':
+            case 'ArrowRight':
+                if (!this.keys.right) this.hasPressed = true
+                this.keys.right = true
+                break
+
+            case 'w':
+            case 'ArrowUp':
+                if (!this.keys.up) this.hasPressed = true
+                this.keys.up = true
+                break
+
+            case 's':
+            case 'ArrowDown':
+                if (!this.keys.down) this.hasPressed = true
+                this.keys.down = true
+                break
+
+            case ' ':
+            case 'e':
+                if (!this.keys.action) this.hasPressedAction = true
+                this.keys.action = true
+                break
+        }
+
+        if (this.hasPressed) {
+            SocketManager.instance.socket.emit('input', this.keys)
+            this.hasPressed = false
+        }
     }
 
     private keyUp(e: KeyboardEvent) {
-        this.keys[e.key] = false
+        switch (e.key) {
+            case 'a':
+            case 'ArrowLeft':
+                this.keys.left = false
+                break
+
+            case 'd':
+            case 'ArrowRight':
+                this.keys.right = false
+                break
+
+            case 'w':
+            case 'ArrowUp':
+                this.keys.up = false
+                break
+
+            case 's':
+            case 'ArrowDown':
+                this.keys.down = false
+                break
+
+            case ' ':
+            case 'e':
+                this.keys.action = false
+                break
+        }
+
+        SocketManager.instance.socket.emit('input', this.keys)
     }
-}
-
-/**
- * base class for entities that
- * the player can target/interact with
- */
-abstract class Interactive extends Entity {
-    constructor(x: number, y: number, w: number, h: number) {
-        super(x, y, w, h)
-    }
-
-    public abstract interact()
-
-    public drawDebug(gfx: Renderer, xView: number, yView: number) {
-        gfx.rectangle(
-            this.x - xView,
-            this.y - yView,
-            this.w,
-            this.h,
-            "#ff000055"
-        )
-    }
-}
-
-class TestInteract extends Interactive {
-    public update(dt: number) {}
-    public draw(gfx: Renderer) {}
 
     public interact() {
-        console.log(`you interacted with ${this.uuid}!`)
-    }
-}
-
-class TestCollider extends Entity {
-    constructor(x: number, y: number, w: number, h: number) {
-        super(x, y, w, h)
-    }
-
-    public update(dt: number) {}
-    public draw(gfx: Renderer, xView: number, yView: number) {}
-
-    public drawDebug(gfx: Renderer, xView: number, yView: number) {
-        gfx.emptyRectangle(
-            this.x - xView,
-            this.y - yView,
-            this.w,
-            this.h
-        )
+        console.log("hehe!")
     }
 }
 
@@ -655,22 +798,22 @@ window.onload = function () {
     canvas.style.background = "black"
     const ctx = canvas.getContext('2d')
 
+    SocketManager.instance.init()
+
     const cam = new Camera(0, 0)
     const bg = new Background()
-
-    const player = new Player(Role.HIDE, 2048, 2048)
-
-    EntityManager.Instance.addEntity(player)
-    EntityManager.Instance.addEntity(new TestInteract(1600, 1800, 64, 64))
-    EntityManager.Instance.addEntity(new TestInteract(0, 0, 64, 64))
-    EntityManager.Instance.addEntity(new TestCollider(1800, 1800, 640, 256))
     
     class Amogus extends Game {
         public debug: boolean = true
         
         protected update(dt: number) {
-            EntityManager.Instance.update(dt)
-            cam.lookAt(player.x, player.y)
+            EntityManager.instance.update(dt)
+
+            const player = EntityManager.instance.player
+            if (!player) return
+
+            const [pX, pY] = player.center
+            cam.lookAt(pX, pY)
         }
         
         protected draw(gfx: Renderer) {
@@ -678,28 +821,31 @@ window.onload = function () {
 
             bg.draw(gfx, cam.xView, cam.yView)
             
-            EntityManager.Instance.draw(gfx, cam.xView, cam.yView)
+            EntityManager.instance.draw(gfx, cam.xView, cam.yView)
 
             if (this.debug) this.drawDebug(gfx)
         }
 
         private drawDebug(gfx: Renderer) {
-            EntityManager.Instance.drawDebug(gfx, cam.xView, cam.yView)
+            EntityManager.instance.drawDebug(gfx, cam.xView, cam.yView)
 
-            // display player uuid
-            const uuidText = `uuid: ${player.uuid}`
-            const [uuidW, uuidH] = gfx.measureText(uuidText, 24)
-            gfx.text(uuidText, 0, uuidH, "white", "left", 24)
+            const player = EntityManager.instance.player
+            if (!player) return
+
+            // display player socket id
+            const socketText = `socket id: ${player.socketId}`
+            const [socketW, socketH] = gfx.measureText(socketText, 24)
+            gfx.text(socketText, 8, socketH, "white", "left", 24)
 
             // display player role
             const roleText = `role: ${player.role}`
-            const [roleW, roleH] = gfx.measureText(uuidText, 24)
-            gfx.text(roleText, 0, uuidH + roleH, "white", "left", 24)
+            const [roleW, roleH] = gfx.measureText(roleText, 24)
+            gfx.text(roleText, 8, socketH + roleH, "white", "left", 24)
             
             // display player position
             const posText = `x: ${Math.round(player.x)}, y: ${Math.round(player.y)}`
             const [posW, posH] = gfx.measureText(posText, 24)
-            gfx.text(posText, 0, uuidH + roleH + posH, "white", "left", 24)
+            gfx.text(posText, 8, socketH + roleH + posH, "white", "left", 24)
         }
     }
 
