@@ -18,16 +18,16 @@ app.get('/', (_, res) => {
 
 /// persistent player data ///
 
-const SEEK_SPEED = 480
-const HIDE_SPEED = 512  
+const PLAYER_SPEED = 512  
 
 const PLAYER_COLLIDER_SIZE = 64
 const PLAYER_COLLIDER_OFFSET = 16
 
 class Player {
-    constructor(name, role = null) {
+    constructor(name, role) {
         this.name = name
         this.role = role
+        this.alive = true
     }
 }
 
@@ -38,10 +38,17 @@ class Position {
     }
 }
 
-const LEFT    = 1
-const RIGHT   = 2
-const UP      = 4
-const DOWN    = 8
+
+const ROLE_NONE = "none"
+const ROLE_READY = "ready"
+const ROLE_HIDE = "hide"
+const ROLE_SEEK = "seek"
+const ROLE_SPEC = "spectate"
+
+const INPUT_LEFT    = 1
+const INPUT_RIGHT   = 2
+const INPUT_UP      = 4
+const INPUT_DOWN    = 8
 
 const players = {}
 const playersInputs = {}
@@ -126,9 +133,9 @@ io.on('connection', (socket) => {
 
     /** new user joins the lobby, added to server players */
     socket.on('join', (data) => {
-        const { name, x, y } = data
+        const { name, role, x, y } = data
 
-        players[socket.id] = new Player(name)
+        players[socket.id] = new Player(name, role)
         playersInputs[socket.id] = 0
         playersPositions[socket.id] = new Position(x, y)
 
@@ -155,10 +162,34 @@ io.on('connection', (socket) => {
     })
 
     socket.on('input', (input) => {
-        if (!playerExists(socket.id)) return
+        if (playerExists(socket.id)) {
+            playersInputs[socket.id] = input
+            socket.broadcast.emit('updateInputs', playersInputs)
+        }
+    })
 
-        playersInputs[socket.id] = input
-        socket.broadcast.emit('updateInputs', playersInputs)
+    /** user changes role to "ready" (or un-ready) during pregame lobby */
+    socket.on('ready', (data) => {
+        const { socketId, ready } = data
+
+        if (playerExists(socketId)) {
+            players[socketId].role = ready ? ROLE_READY : ROLE_NONE
+            io.sockets.emit('updateLobby', players)
+        }
+    })
+
+    /** player has been killed and changes to spectator */
+    socket.on('kill', (data) => {
+        const { socketId } = data
+
+        if (playerExists(socketId)) {
+            players[socketId].alive = false
+            players[socketId].role = ROLE_SPEC
+
+            io.sockets.emit('updateLobby', players)
+
+            serverMessage(`user "${socketId}" has been killed!!`)
+        }
     })
 })
 
@@ -172,12 +203,13 @@ setInterval(stepPhysics, TIMESTEP)
 function stepPhysics() {
     for (let id in players) {
         if (playerExists(id)) {
+            const { alive } = players[id]
             const input = playersInputs[id]
             const position = playersPositions[id]
 
             const dir = { x: 0, y: 0 }
-            dir.x = (-(!!(input & LEFT)) + +(!!(input & RIGHT)))
-            dir.y = (-(!!(input & UP)) + +(!!(input & DOWN)))
+            dir.x = (-(!!(input & INPUT_LEFT)) + +(!!(input & INPUT_RIGHT)))
+            dir.y = (-(!!(input & INPUT_UP)) + +(!!(input & INPUT_DOWN)))
 
             if (+dir.x && +dir.y) {
                 const dirLength = Math.sqrt(dir.x * dir.x + dir.y * dir.y)
@@ -185,11 +217,11 @@ function stepPhysics() {
                 dir.y /= dirLength
             }
 
-            const dX = dir.x * HIDE_SPEED * TIMESTEP * .001
-            const dY = dir.y * HIDE_SPEED * TIMESTEP * .001
+            const dX = dir.x * PLAYER_SPEED * TIMESTEP * .001
+            const dY = dir.y * PLAYER_SPEED * TIMESTEP * .001
 
             // if a valid level was loaded
-            if (level) {
+            if (alive && level) {
                 // horizontal collision resolution
                 if (Math.abs(dX) > 0)
                 {

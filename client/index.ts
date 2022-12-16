@@ -12,15 +12,12 @@ const TILE_SIZE = 160
 const ANIM_FRAMERATE = 0.041
 
 const INTERACT_DISTANCE = 256
-const SEEK_SPEED = 480
-const HIDE_SPEED = 512  
+const PLAYER_SPEED = 512  
 
 const PLAYER_WIDTH = 96
 const PLAYER_HEIGHT = 128
 const PLAYER_COLLIDER_SIZE = 64
 const PLAYER_COLLIDER_OFFSET = 16
-
-const CLIENTSIDE_DISTANCE_CORRECTION_THRESHOLD = 16
 /////////////////
 
 /// utility functions ///
@@ -49,7 +46,7 @@ class SocketManager {
         return this.socket.id
     }
 
-    public init() {
+    public init(name: string) {
         this.socket = io()
 
         // connect to lobby
@@ -58,10 +55,10 @@ class SocketManager {
             // emit 'join' socket event
             const x = 256 + Math.random() * 256
             const y = 256 + Math.random() * 256
-            this.socket.emit('join', { name: "Benji", x, y })
+            this.socket.emit('join', { name, role: Role.NONE, x, y })
             EntityManager.instance.addEntity(
                 this.socketId,
-                new Player(true, "Benji", this.socketId, x, y)
+                new Player(name, Role.NONE, this.socketId, true, true, x, y)
             )
         })
 
@@ -70,13 +67,20 @@ class SocketManager {
             const updatedPlayers: { [socketId: string]: boolean } = {}
 
             for (let id in players) {
+                const { name, role, alive } = players[id]
+
                 // add new players to entity manager
                 if (!(id in EntityManager.instance.entities) && id !== this.socketId) {
-                    const { name } = players[id]
                     EntityManager.instance.addEntity(
                         id,
-                        new Player(false, name, id, 0, 0)
+                        new Player(name, role, id, false, alive, 0, 0)
                     )
+                } else {
+                    EntityManager.instance.entities[id].username = name
+                    EntityManager.instance.entities[id].role = role
+
+                    if (EntityManager.instance.entities[id].alive && !alive)
+                        EntityManager.instance.entities[id].kill()
                 }
 
                 updatedPlayers[id] = true
@@ -107,14 +111,9 @@ class SocketManager {
                     const { x, y } = positions[id]
                     const player = EntityManager.instance.entities[id]
 
-                    const distance = dist({ x: player.x, y: player.y }, { x, y })
-
-                    // if the diff between client and server pos is beyond threshold,
-                    // lerp towards the correct version (so we don't jump)
-                    if (distance > CLIENTSIDE_DISTANCE_CORRECTION_THRESHOLD) {
-                        player.x = lerp(player.x, x, 0.1)
-                        player.y = lerp(player.y, y, 0.1)
-                    }
+                    // lerp towards the correct position (so we don't stutter/jump)
+                    player.x = lerp(player.x, x, 0.2)
+                    player.y = lerp(player.y, y, 0.2)
                 }
             }
         })
@@ -274,7 +273,16 @@ class Renderer {
         return [metrics.width, metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent]
     }
 }
-  
+
+class GameManager {
+    private static _instance: GameManager
+    public static get instance() {
+        return this._instance || (this._instance = new this())
+    }
+
+    public started: boolean = true
+    public debug: boolean = true
+}  
 
 /** base asset class to handle file loading */
 abstract class Asset {
@@ -317,6 +325,10 @@ class Animator {
     public frame: number
     private time: number
 
+    public get currentSprite() {
+        return this.animations[this.animation][this.frame]
+    }
+
     constructor(animation: keyof Animations, animations: Animations) {
         this.animations = animations
         this.animation = animation
@@ -340,10 +352,6 @@ class Animator {
         this.frame = 0
         this.time = 0
     }
-
-    public getSprite() {
-        return this.animations[this.animation][this.frame]
-    }
 }
 
 /** font asset loaded as fontface rather than from css */
@@ -357,7 +365,7 @@ class Font extends Asset {
         
         this.font = new FontFace(name, `url(${this.filePath})`)
         this.font.load().then((font) => {
-            document.fonts.add(font);
+            document.fonts.add(font)
             this.name = '12px ' + name
             this.loaded = true
         })
@@ -464,8 +472,8 @@ class Level extends Asset {
 
                 if (block) {
                     gfx.ctx.save()
-                    gfx.ctx.fillStyle = "red"
-                    gfx.ctx.strokeStyle = "red"
+                    gfx.ctx.fillStyle = "blue"
+                    gfx.ctx.strokeStyle = "blue"
                     gfx.ctx.lineWidth = 1
                     gfx.ctx.beginPath()
                     gfx.ctx.rect(
@@ -605,9 +613,11 @@ class EntityManager {
 }
 
 enum Role {
+    NONE = "none",
+    READY = "ready",
     HIDE = "hide",
     SEEK = "seek",
-    SPEC = "spectate"
+    SPEC = "spectate",
 }
 
 enum Inputs {
@@ -625,7 +635,7 @@ class Player {
     // status
     public player: boolean
     public role: Role
-    private speed: number = HIDE_SPEED
+    public alive: boolean
 
     // keyboard events
     public keys: number = 0
@@ -643,6 +653,9 @@ class Player {
     public w: number
     public h: number
 
+    private deadX: number = 0
+    private deadY: number = 0
+
     get center() {
         return [this.x + this.w / 2, this.y + this.h / 2]
     }
@@ -655,36 +668,18 @@ class Player {
     // interact
     public target: Player | null = null
 
-    constructor(player: boolean, username: string, socketId: string, x: number, y: number) {
+    constructor(username: string, role: Role, socketId: string, player: boolean, alive: boolean, x: number, y: number) {
         this.x = x
         this.y = y
         this.w = PLAYER_WIDTH
         this.h = PLAYER_HEIGHT
 
-        this.socketId = socketId
         this.username = username
+        this.socketId = socketId
+        this.role = role
 
         this.player = player
-
-        // this.role = role
-        // switch (role) {
-        //     case Role.HIDE:
-        //         this.speed = HIDE_SPEED
-        //         break
-
-        //     case Role.SEEK:
-        //         this.speed = SEEK_SPEED
-        //         break
-        // }
-
-        // this.keys = {
-        //     // movement arrows
-        //     ArrowLeft: false, ArrowRight: false, ArrowUp: false, ArrowDown: false,
-        //     // movement wasd
-        //     w: false, a: false, s: false, d: false,
-        //     // interact
-        //     ' ': false, e: false
-        // }
+        this.alive = alive
 
         if (this.player) {
             document.onkeydown = (e) => this.keyDown(e)
@@ -692,7 +687,7 @@ class Player {
         }
 
         this.animator = new Animator("idle", {
-            idle: [new Sprite("sprites/idle.png"),],
+            idle: [new Sprite("sprites/idle.png")],
             walk: [
                 new Sprite("sprites/Walk0001.png"),
                 new Sprite("sprites/Walk0002.png"),
@@ -707,6 +702,8 @@ class Player {
                 new Sprite("sprites/Walk0011.png"),
                 new Sprite("sprites/Walk0012.png"),
             ],
+            ghost: [new Sprite("sprites/Ghost0001.png")],
+            dead: [new Sprite("sprites/dead.png")],
         })
     }
     
@@ -721,8 +718,10 @@ class Player {
 
         if (!!dir.x) this.facing = dir.x > 0
 
-        if (!!dir.x || !!dir.y) this.animator.setAnimation("walk")
-        else this.animator.setAnimation("idle")
+        if (this.alive) {
+            if (!!dir.x || !!dir.y) this.animator.setAnimation("walk")
+            else this.animator.setAnimation("idle")
+        }
 
         if (+dir.x && +dir.y) {
             const dirLength = Math.sqrt(dir.x * dir.x + dir.y * dir.y)
@@ -730,11 +729,11 @@ class Player {
             dir.y /= dirLength
         }
 
-        const dX = dir.x * this.speed * dt 
-        const dY = dir.y * this.speed * dt 
+        const dX = dir.x * PLAYER_SPEED * dt 
+        const dY = dir.y * PLAYER_SPEED * dt 
 
         const level = EntityManager.instance.level
-        if (level) {
+        if (this.alive && level) {
             // horizontal collision resolution
             if (Math.abs(dX) > 0)
             {
@@ -785,31 +784,48 @@ class Player {
             this.y += dY
         }
 
-        // check for closest nearby interactive entity
-        this.target = null
-        let min = INTERACT_DISTANCE
-        Object.keys(EntityManager.instance.entities).forEach((id) => {
-            if (id !== this.socketId) {
-                const e = EntityManager.instance.entities[id]
-                const [x, y] = e.center
+        if (GameManager.instance.started) {
+            // check for closest nearby interactive entity
+            if (this.player && this.role === Role.SEEK) {
+                this.target = null
+                let min = INTERACT_DISTANCE
+                Object.keys(EntityManager.instance.entities).forEach((id) => {
+                    if (id !== this.socketId) {
+                        const e = EntityManager.instance.entities[id]
 
-                const distance = dist({ x: this.x, y: this.y }, { x, y })
+                        // skip players who are already dead
+                        if (e.role !== Role.SPEC) {
+                            const [x, y] = e.center
 
-                if (distance < min) {
-                    min = distance
-                    this.target = e
+                            const distance = dist({ x: this.x, y: this.y }, { x, y })
+
+                            if (distance < min) {
+                                min = distance
+                                this.target = e
+                            }
+                        }
+                    }
+                })
+                
+                if (!!this.target && this.hasPressedAction) {
+                    this.hasPressedAction = false
+
+                    this.target.interact()
+                    this.target = null
                 }
             }
-        })
-        
-        if (!!this.target && this.hasPressedAction) {
-            this.target.interact()
-            this.hasPressedAction = false
+        } else {
+            if (this.hasPressedAction) {
+                this.hasPressedAction = false
+                this.role = this.role === Role.READY ? Role.NONE : Role.READY
+
+                SocketManager.instance.socket.emit('ready', { socketId: this.socketId, ready: this.role === Role.READY })
+            }
         }
     }
 
     public draw(gfx: Renderer, xView: number, yView: number) {
-        const sprite = this.animator.getSprite()
+        const sprite = this.animator.currentSprite
         if (sprite.loaded) {
             gfx.ctx.save()
 
@@ -820,9 +836,9 @@ class Player {
 
             gfx.textOutline(
                 this.username,
-                this.x + this.w / 2 - xView,
-                this.y - yView,
-                "white",
+                (this.alive ? this.x : this.deadX) + this.w / 2 - xView,
+                (this.alive ? this.y : this.deadY) - yView,
+                this.alive ? "white" : "red",
                 "black",
                 "center",
                 24,
@@ -835,13 +851,33 @@ class Player {
                 0,
                 sprite.image.width,
                 sprite.image.height,
-                this.x - xView,
-                this.y - yView,
+                (this.alive ? this.x : this.deadX) - xView,
+                (this.alive ? this.y : this.deadY) - yView,
                 this.w,
                 this.h
             )
 
             gfx.ctx.restore()
+
+            if (!this.alive && !EntityManager.instance.player.alive) {
+                gfx.ctx.save()
+                gfx.ctx.globalAlpha = 0.4
+                const sprite = this.animator.animations['ghost'][0]
+                if (sprite.loaded) {
+                    gfx.ctx.drawImage(
+                        sprite.image,
+                        0,
+                        0,
+                        sprite.image.width,
+                        sprite.image.height,
+                        this.x - xView,
+                        this.y - yView,
+                        this.w,
+                        this.h
+                    )
+                }
+                gfx.ctx.restore()
+            }
         }
     }
 
@@ -881,7 +917,7 @@ class Player {
     }
 
     private keyDown(e: KeyboardEvent) {
-        // e.preventDefault()
+        e.preventDefault()
 
         switch (e.key) {
             case 'a':
@@ -912,6 +948,10 @@ class Player {
             case 'e':
                 if (!this.actionDown) this.hasPressedAction = true
                 this.actionDown = true
+                break
+
+            case 'r':
+                this.role = Role.SEEK
                 break
         }
 
@@ -953,83 +993,113 @@ class Player {
     }
 
     public interact() {
-        console.log("hehe!")
+        SocketManager.instance.socket.emit('kill', { socketId: this.socketId })
+    }
+
+    public kill() {
+        this.role = Role.SPEC
+        this.alive = false
+        
+        this.deadX = this.x
+        this.deadY = this.y
+        
+        this.animator.setAnimation('dead')
     }
 }
 
 window.onload = function () {
-    const canvas = document.getElementById('canvas') as HTMLCanvasElement
-    canvas.width = GAME_WIDTH
-    canvas.height = GAME_HEIGHT
-    canvas.style.background = "black"
-    canvas.style.imageRendering = 'pixelated'
-    const ctx = canvas.getContext('2d')
-    ctx.imageSmoothingEnabled = false
+    const form = document.getElementById("usernameForm") as HTMLFormElement
+    const input = document.getElementById("usernameInput") as HTMLInputElement
 
-    const cam = new Camera(0, 0)
-    const bg = new Background()
+    form.onsubmit = (e) => {
+        e.preventDefault()
+        form.remove()
 
-    const lvl = new Level("maps/lvl0.json")
-    
-    class Amogus extends Game {
-        public debug: boolean = true
+        // const canvas = document.getElementById('canvas') as HTMLCanvasElement
+        const canvas = document.createElement("canvas")
+        canvas.width = GAME_WIDTH
+        canvas.height = GAME_HEIGHT
+        canvas.style.background = "black"
+        document.body.appendChild(canvas)
 
-        public start() {
-            SocketManager.instance.init()
+        const ctx = canvas.getContext('2d')
 
-            lvl.Load(this.gfx)
-            EntityManager.instance.setLevel(lvl)
-        }
+        const cam = new Camera(0, 0)
+        const bg = new Background()
+
+        const lvl = new Level("maps/lvl0.json")
         
-        protected update(dt: number) {
-            EntityManager.instance.update(dt)
+        class Amogus extends Game {
+            public start() {
+                SocketManager.instance.init(input.value)
 
-            const player = EntityManager.instance.player
-            if (!player) return
-
-            const [pX, pY] = player.center
-            cam.lookAt(pX, pY)
-        }
-        
-        protected draw(gfx: Renderer) {
-            gfx.clearScreen()
-
-            bg.draw(gfx, cam.xView, cam.yView)
-            lvl.draw(gfx, cam.xView, cam.yView)
+                lvl.Load(this.gfx)
+                EntityManager.instance.setLevel(lvl)
+            }
             
-            EntityManager.instance.draw(gfx, cam.xView, cam.yView)
+            protected update(dt: number) {
+                EntityManager.instance.update(dt)
 
-            if (this.debug) this.drawDebug(gfx)
-        }
+                const player = EntityManager.instance.player
+                if (!player) return
 
-        private drawDebug(gfx: Renderer) {
-            EntityManager.instance.drawDebug(gfx, cam.xView, cam.yView)
-
-            const player = EntityManager.instance.player
-            if (!player) return
-
-            // display player socket id
-            const socketText = `socket id: ${player.socketId}`
-            const [socketW, socketH] = gfx.measureText(socketText, 24)
-            gfx.text(socketText, 8, socketH, "white", "left", 24)
-
-            // display player role
-            const roleText = `role: ${player.role}`
-            const [roleW, roleH] = gfx.measureText(roleText, 24)
-            gfx.text(roleText, 8, socketH + roleH, "white", "left", 24)
+                const [pX, pY] = player.center
+                cam.lookAt(pX, pY)
+            }
             
-            // display player position
-            const posText = `x: ${Math.round(player.x)}, y: ${Math.round(player.y)}`
-            const [posW, posH] = gfx.measureText(posText, 24)
-            gfx.text(posText, 8, socketH + roleH + posH, "white", "left", 24)
+            protected draw(gfx: Renderer) {
+                gfx.clearScreen()
 
-            // num players
-            const playersText = `${Object.keys(EntityManager.instance.entities).length} players`
-            gfx.textOutline(playersText, GAME_WIDTH / 2, GAME_HEIGHT - 16, "yellow", "black", "left", 32, 4)
+                bg.draw(gfx, cam.xView, cam.yView)
+                lvl.draw(gfx, cam.xView, cam.yView)
+                
+                EntityManager.instance.draw(gfx, cam.xView, cam.yView)
+
+                if (GameManager.instance.debug) this.drawDebug(gfx)
+            }
+
+            private drawDebug(gfx: Renderer) {
+                EntityManager.instance.drawDebug(gfx, cam.xView, cam.yView)
+
+                const player = EntityManager.instance.player
+                if (!player) return
+
+                // display player socket id
+                const socketText = `socket id: ${player.socketId}`
+                const [socketW, socketH] = gfx.measureText(socketText, 24)
+                gfx.text(socketText, 8, socketH, "white", "left", 24)
+
+                // display player role
+                const roleText = `role: ${player.role}`
+                const [roleW, roleH] = gfx.measureText(roleText, 24)
+                gfx.text(roleText, 8, socketH + roleH, "white", "left", 24)
+                
+                // display player position
+                const posText = `x: ${Math.round(player.x)}, y: ${Math.round(player.y)}`
+                const [posW, posH] = gfx.measureText(posText, 24)
+                gfx.text(posText, 8, socketH + roleH + posH, "white", "left", 24)
+
+                // num players ready/alive
+                if (GameManager.instance.started) {
+                    const alive = Object.values(EntityManager.instance.entities).filter((e) => e.alive).length
+                    const total = Object.keys(EntityManager.instance.entities).length
+                    const playersText = `${alive} / ${total} players alive`
+                    gfx.textOutline(playersText, GAME_WIDTH / 2, GAME_HEIGHT - 16, alive === total ? "#00ff00" : alive > 2 ? "yellow" : "red", "black", "center", 32, 4)
+                } else {
+                    const ready = Object.values(EntityManager.instance.entities).filter((e) => e.role === Role.READY).length
+                    const total = Object.keys(EntityManager.instance.entities).length
+                    const playersText = `${ready} / ${total} players ready`
+                    const [playersTextW, playersTextH] = gfx.measureText(playersText, 32)
+                    gfx.textOutline(playersText, GAME_WIDTH / 2, GAME_HEIGHT - 16, ready === total ? "#00ff00" : ready > 0 ? "yellow" : "red", "black", "center", 32, 4)
+
+                    const instructionText = `Press SPACE or E to READY`
+                    gfx.textOutline(instructionText, GAME_WIDTH / 2, GAME_HEIGHT - 16 - playersTextH, "white", "black", "center", 24, 4)
+                }
+            }
         }
+
+        const game = new Amogus(ctx)
+        game.start()
+        game.run()
     }
-
-    const game = new Amogus(ctx)
-    game.start()
-    game.run()
 }
