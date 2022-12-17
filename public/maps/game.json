@@ -1,5 +1,6 @@
 {
-    "title": "test area",
+    "title": "test game area",
+    "bg": "sprites/map.jpeg",
     "width": 7680,
     "height": 4320,
     "startX": 4096,

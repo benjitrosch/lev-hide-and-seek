@@ -94,6 +94,15 @@ function loadLevel(name) {
     const { title, width, height, startX, startY, blocks } = JSON.parse(data)
 
     level = new Level(title, width, height, startX, startY, blocks)
+
+    // move all players to starting location
+    for (let id in players) {
+        playersPositions[id].x = level.startX
+        playersPositions[id].y = level.startY
+    }
+
+    io.sockets.emit('updateLobby', players)
+
     serverMessage(`loaded level "${name}"`, "success")
 }
 
@@ -242,14 +251,17 @@ io.on('connection', (socket) => {
     socket.on('join', (data) => {
         // if this is the first player to join,
         // start the server-side game loop
-        if (!Object.keys(players).length)
+        if (!Object.keys(players).length) {
+            loadLevel("lobby.json")
             gameLoop = setInterval(stepPhysics, TIMESTEP)
+        }
 
-        const { name, x, y } = data
+        const { name } = data
 
         players[socket.id] = new Player(name, ROLE_NONE)
         playersInputs[socket.id] = 0
-        playersPositions[socket.id] = new Position(x, y)
+        if (level) playersPositions[socket.id] = new Position(level.startX, level.startY)
+        else playersPositions[socket.id] = new Position(0, 0)
 
         // if the game has already started, change the
         // new player into a spectator
@@ -335,7 +347,7 @@ function startGame() {
     gameStarted = true
 
     // load into the new game level
-    loadLevel("lvl0.json")
+    loadLevel("game.json")
 
     // randomly choose a player to be the "seek" role
     // everyone else becomes "hide" by default
@@ -345,10 +357,6 @@ function startGame() {
     for (let id in players) {
         if (id === randomId) players[id].role = ROLE_SEEK
         else players[id].role = ROLE_HIDE
-
-        // move all players to starting location
-        playersPositions[id].x = level.startX
-        playersPositions[id].y = level.startY
     }
 
     io.sockets.emit('gameStarted')
@@ -358,20 +366,24 @@ function startGame() {
 }
 
 function endGame(won) {
+    gameLoading = true
     gameStarted = false
-    level = null
 
     io.sockets.emit('gameEnded', { won })
     
-    setTimeout(restartLobby, 10000)
+    setTimeout(restartLobby, 8000)
     serverMessage("game has ended")
 }
 
 function restartLobby() {
+    gameLoading = false
+
     for (let id in players) {
         players[id].role = ROLE_NONE
         players[id].alive = true
     }
+
+    loadLevel("lobby.json")
 
     io.sockets.emit('gameRestart')
     io.sockets.emit('updateLobby', players)
@@ -384,7 +396,7 @@ function resetServer() {
     Object.keys(playersInputs).forEach((key) => delete playersInputs[key])
     Object.keys(playersPositions).forEach((key) => delete playersPositions[key])
 
-    level = null
+    loadLevel("lobby.json")
 
     gameStarted = false
     gameLoading = false

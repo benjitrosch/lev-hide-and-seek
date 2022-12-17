@@ -4,9 +4,6 @@ const io = require("socket.io-client")
 const GAME_WIDTH = 1280
 const GAME_HEIGHT = 720
 
-const WORLD_WIDTH = 7680
-const WORLD_HEIGHT = 4320
-
 const TILE_SIZE = 160
 
 const ANIM_FRAMERATE = 0.041
@@ -18,6 +15,8 @@ const PLAYER_WIDTH = 96
 const PLAYER_HEIGHT = 128
 const PLAYER_COLLIDER_SIZE = 64
 const PLAYER_COLLIDER_OFFSET = 16
+
+const MAX_DISTANCE_RECONCILIATION = 128
 /////////////////
 
 /// utility functions ///
@@ -53,9 +52,7 @@ class SocketManager {
         this.socket.on('connect', () => {
             // add self to entity manager and
             // emit 'join' socket event
-            const x = 256 + Math.random() * 256
-            const y = 256 + Math.random() * 256
-            this.socket.emit('join', { name, x, y })
+            this.socket.emit('join', { name })
         })
 
         this.socket.on('returnPlayer', (player) => {
@@ -67,8 +64,12 @@ class SocketManager {
 
             // if the returned player has a spectator role,
             // we can assume the game has already started
-            if (role === Role.SPEC)
+            if (role === Role.SPEC) {
                 GameManager.instance.state = GameState.PLAYING
+
+                const level = new Level("maps/game.json")
+                EntityManager.instance.setLevel(level)
+            }
         })
 
         // get latest players in lobby
@@ -119,12 +120,22 @@ class SocketManager {
         this.socket.on('updatePositions', (positions) => {
             for (let id in positions) {
                 if (id in EntityManager.instance.entities) {
-                    const { x, y } = positions[id]
                     const player = EntityManager.instance.entities[id]
+                    const { x: oldX, y: oldY } = player
+                    const { x: newX, y: newY } = positions[id]
 
-                    // lerp towards the correct position (so we don't stutter/jump)
-                    player.x = lerp(player.x, x, 0.2)
-                    player.y = lerp(player.y, y, 0.2)
+                    // if distance between client side pos and
+                    // server side calculated pos is larger than
+                    // acceptable threshold, just jump
+                    const distance = dist({ x: newX, y: newY }, { x: oldX, y: oldY })
+                    if (distance > MAX_DISTANCE_RECONCILIATION) {
+                        player.x = newX
+                        player.y = newY
+                    } else {
+                        // lerp towards the correct position (so we don't stutter/jump)
+                        player.x = lerp(oldX, newX, 0.2)
+                        player.y = lerp(oldY, newY, 0.2)
+                    }
                 }
             }
         })
@@ -136,7 +147,7 @@ class SocketManager {
         this.socket.on('gameStarted', () => {
             setTimeout(() => GameManager.instance.state = GameState.PLAYING, 1000)
 
-            const level = new Level("maps/lvl0.json")
+            const level = new Level("maps/game.json")
             EntityManager.instance.setLevel(level)
         })
 
@@ -150,7 +161,11 @@ class SocketManager {
         })
 
         this.socket.on('gameRestart', () => {
-            GameManager.instance.state = GameState.PREGAME
+            const level = new Level("maps/lobby.json")
+            EntityManager.instance.setLevel(level)
+
+            GameManager.instance.state = GameState.LOADING
+            setTimeout(() => GameManager.instance.state = GameState.PREGAME, 1000)
         })
     }
 }
@@ -420,30 +435,9 @@ class Font extends Asset {
     }
 }
 
-class Background {
-    private sprite: Sprite
-
-    constructor() {
-        this.sprite = new Sprite('sprites/map.jpeg')
-    }
-
-    public draw(gfx: Renderer, xView: number, yView: number) {
-        if (!this.sprite.loaded) return
-
-        let w = GAME_WIDTH
-	    let h = GAME_HEIGHT
-
-	    if (this.sprite.image.width - xView < w)
-	        w = this.sprite.image.width - xView
-	    if (this.sprite.image.height - yView < h)
-	        h = this.sprite.image.height - yView
-
-	    gfx.ctx.drawImage(this.sprite.image, xView, yView, w, h, 0, 0, w, h)
-    }
-}
-
 type LevelData = {
     title: string
+    bg: string
     width: number
     height: number
     startX: number
@@ -470,6 +464,7 @@ class Level extends Asset {
 
     public blocks: boolean[] = []
 
+    private sprite: Sprite
     public loaded: boolean = false
 
     constructor(filePath: string) {
@@ -478,7 +473,7 @@ class Level extends Asset {
         fetch(this.filePath)
             .then((res) => res.json())
             .then((data: LevelData) => {
-                const { title, width, height, startX, startY, blocks } = data
+                const { title, bg, width, height, startX, startY, blocks } = data
 
                 this.title = title
                 
@@ -490,49 +485,108 @@ class Level extends Asset {
         
                 this.blocks = blocks.map((b) => !!b)
 
+                this.sprite = new Sprite(bg)
                 this.loaded = true
             })
     }
-
+    
     public draw(gfx: Renderer, xView: number, yView: number) {
-        if (!this.loaded) return
-
-        let w = GAME_WIDTH
-	    let h = GAME_HEIGHT
-
-	    if (this.width * TILE_SIZE - xView < w)
-	        w = this.width * TILE_SIZE - xView
-	    if (this.height * TILE_SIZE - yView < h)
-	        h = this.height * TILE_SIZE - yView
-
-        const startX = Math.max(0, ~~(xView / TILE_SIZE))
-        const startY = Math.max(0, ~~(yView / TILE_SIZE))
+        // render background image
+        if (this.sprite?.loaded)
+        {
+            if (!this.sprite.loaded) return
+            
+            let w = GAME_WIDTH
+            let h = GAME_HEIGHT
+            
+            if (this.sprite.image.width - xView < w)
+            w = this.sprite.image.width - xView
+            if (this.sprite.image.height - yView < h)
+            h = this.sprite.image.height - yView
+            
+            gfx.ctx.drawImage(this.sprite.image, xView, yView, w, h, 0, 0, w, h)
+        }
         
-        const endX = Math.min(this.rows, startX + w / TILE_SIZE + 1)
-        const endY = Math.min(this.cols, startY + h / TILE_SIZE + 1)
+        // render individual blocks
+        if (this.loaded)
+        {
+            let w = GAME_WIDTH
+            let h = GAME_HEIGHT
 
-        for (let y = startY; y < endY; y++) {
-            for (let x = startX; x < endX; x++) {
-                const block = this.blocks[x + y * this.rows]
+            if (this.width * TILE_SIZE - xView < w)
+                w = this.width * TILE_SIZE - xView
+            if (this.height * TILE_SIZE - yView < h)
+                h = this.height * TILE_SIZE - yView
 
-                if (block) {
-                    gfx.ctx.save()
-                    gfx.ctx.fillStyle = "blue"
-                    gfx.ctx.strokeStyle = "blue"
-                    gfx.ctx.lineWidth = 1
-                    gfx.ctx.beginPath()
-                    gfx.ctx.rect(
-                        x * TILE_SIZE - xView,
-                        y * TILE_SIZE - yView,
-                        1 * TILE_SIZE,
-                        1 * TILE_SIZE
-                    )
-                    gfx.ctx.fill()
-                    gfx.ctx.stroke()
-                    gfx.ctx.restore()
+            const startX = Math.max(0, ~~(xView / TILE_SIZE))
+            const startY = Math.max(0, ~~(yView / TILE_SIZE))
+            
+            const endX = Math.min(this.rows, startX + w / TILE_SIZE + 1)
+            const endY = Math.min(this.cols, startY + h / TILE_SIZE + 1)
+
+            for (let y = startY; y < endY; y++) {
+                for (let x = startX; x < endX; x++) {
+                    const block = this.blocks[x + y * this.rows]
+
+                    if (block) {
+                        gfx.ctx.save()
+                        gfx.ctx.fillStyle = "blue"
+                        gfx.ctx.strokeStyle = "blue"
+                        gfx.ctx.lineWidth = 1
+                        gfx.ctx.beginPath()
+                        gfx.ctx.rect(
+                            x * TILE_SIZE - xView,
+                            y * TILE_SIZE - yView,
+                            1 * TILE_SIZE,
+                            1 * TILE_SIZE
+                        )
+                        gfx.ctx.fill()
+                        gfx.ctx.stroke()
+                        gfx.ctx.restore()
+                    }
                 }
             }
         }
+    }
+
+    public drawDebug(gfx: Renderer, xView: number, yView: number) {
+        if (this.loaded)
+        {
+            let w = GAME_WIDTH
+            let h = GAME_HEIGHT
+
+            if (this.width * TILE_SIZE - xView < w)
+                w = this.width * TILE_SIZE - xView
+            if (this.height * TILE_SIZE - yView < h)
+                h = this.height * TILE_SIZE - yView
+
+            const startX = Math.max(0, ~~(xView / TILE_SIZE))
+            const startY = Math.max(0, ~~(yView / TILE_SIZE))
+            
+            const endX = Math.min(this.rows, startX + w / TILE_SIZE + 1)
+            const endY = Math.min(this.cols, startY + h / TILE_SIZE + 1)
+
+            for (let y = startY; y < endY; y++) {
+                for (let x = startX; x < endX; x++) {
+                    const block = this.blocks[x + y * this.rows]
+
+                    if (block) {
+                        gfx.ctx.save()
+                        gfx.ctx.strokeStyle = "red"
+                        gfx.ctx.lineWidth = 1
+                        gfx.ctx.beginPath()
+                        gfx.ctx.rect(
+                            x * TILE_SIZE - xView,
+                            y * TILE_SIZE - yView,
+                            1 * TILE_SIZE,
+                            1 * TILE_SIZE
+                        )
+                        gfx.ctx.stroke()
+                        gfx.ctx.restore()
+                    }
+                }
+            }
+        }  
     }
 
     public check(x: number, y: number) {
@@ -555,15 +609,17 @@ class Camera {
         this.xView = lerp(this.xView, x - GAME_WIDTH / 2, ease)
         this.yView = lerp(this.yView, y - GAME_HEIGHT / 2, ease)
 
-        this.clamp()
+        const level = EntityManager.instance.level
+        if (level)
+            this.clamp(level)
     }
 
     // restrict within game bounds (between origin and total area)
-    private clamp() {
-        this.xView = Math.min(this.xView, WORLD_WIDTH - GAME_WIDTH)
+    private clamp(level: Level) {
+        this.xView = Math.min(this.xView, level.width - GAME_WIDTH)
         this.xView = Math.max(this.xView, 0)
 
-        this.yView = Math.min(this.yView, WORLD_HEIGHT - GAME_HEIGHT)
+        this.yView = Math.min(this.yView, level.height - GAME_HEIGHT)
         this.yView = Math.max(this.yView, 0)
     }
 }
@@ -1251,7 +1307,7 @@ function drawSpotlight(gfx: Renderer, xView: number, yView: number) {
         PLAYER_COLLIDER_SIZE * 10
     )
 
-    spotlight.addColorStop(player.role === Role.SEEK ? 0.1 : 0.1, 'transparent')
+    spotlight.addColorStop(player.role === Role.SEEK ? 0.1 : 0.2, 'transparent')
     spotlight.addColorStop(player.role === Role.SEEK ? 0.5 : 1.0, 'black')
 
     gfx.ctx.fillStyle = spotlight
@@ -1262,20 +1318,27 @@ window.onload = function () {
     const form = document.createElement('form')
 
     const label = document.createElement('label')
-    label.setAttribute('for', 'username')
+    label.className = 'label'
+    label.htmlFor = 'username'
     label.innerText = 'Enter Name'
     
     const input = document.createElement('input')
-    input.setAttribute('id', 'username')
+    input.className = 'input'
+    input.id = 'username'
+    input.required = true
+    input.autocomplete = 'off'
 
     const button = document.createElement('button')
-    button.setAttribute('type', 'submit')
+    button.className = 'button'
+    button.type = 'submit'
     button.innerText = 'ENTER'
 
     form.append(label, input, button)
     document.body.appendChild(form)
 
     form.onsubmit = (e) => {
+        if (input.value.length < 3 || input.value.length > 16) return
+
         e.preventDefault()
         form.remove()
 
@@ -1291,11 +1354,12 @@ window.onload = function () {
         const bufferCtx = buffer.getContext('2d')
         const bufferGfx = new Renderer(bufferCtx)
 
-        const bg = new Background()
-
         class Amogus extends Game {
             public start() {
                 SocketManager.instance.init(input.value)
+
+                const level = new Level("maps/lobby.json")
+                EntityManager.instance.setLevel(level)
             }
             
             protected update(dt: number) {
@@ -1320,9 +1384,8 @@ window.onload = function () {
                 bufferGfx.clearScreen()
                 
                 // draw game onto buffer canvas
-                bg.draw(bufferGfx, Camera.instance.xView, Camera.instance.yView)
-                EntityManager.instance.draw(bufferGfx, Camera.instance.xView, Camera.instance.yView)
                 EntityManager.instance.level?.draw(bufferGfx, Camera.instance.xView, Camera.instance.yView)
+                EntityManager.instance.draw(bufferGfx, Camera.instance.xView, Camera.instance.yView)
                 
                 // draw shadow mask to hide the map/other players
                 const shouldRenderShadows = GameManager.instance.started && EntityManager.instance.player?.alive
@@ -1381,7 +1444,11 @@ window.onload = function () {
             }
 
             private drawDebug(gfx: Renderer) {
-                drawLightsDebug(gfx, Camera.instance.xView, Camera.instance.yView)
+                // render shadow caster debug
+                if (GameManager.instance.started && EntityManager.instance.player?.alive)
+                    drawLightsDebug(gfx, Camera.instance.xView, Camera.instance.yView)
+
+                EntityManager.instance.level?.drawDebug(gfx, Camera.instance.xView, Camera.instance.yView)
                 EntityManager.instance.drawDebug(gfx, Camera.instance.xView, Camera.instance.yView)
 
                 const player = EntityManager.instance.player
