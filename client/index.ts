@@ -55,11 +55,20 @@ class SocketManager {
             // emit 'join' socket event
             const x = 256 + Math.random() * 256
             const y = 256 + Math.random() * 256
-            this.socket.emit('join', { name, role: Role.NONE, x, y })
+            this.socket.emit('join', { name, x, y })
+        })
+
+        this.socket.on('returnPlayer', (player) => {
+            const { name, role, socketId, alive } = player
             EntityManager.instance.addEntity(
-                this.socketId,
-                new Player(name, Role.NONE, this.socketId, true, true, x, y)
+                socketId,
+                new Player(name, role, socketId, true, alive)
             )
+
+            // if the returned player has a spectator role,
+            // we can assume the game has already started
+            if (role === Role.SPEC)
+                GameManager.instance.state = GameState.PLAYING
         })
 
         // get latest players in lobby
@@ -73,14 +82,16 @@ class SocketManager {
                 if (!(id in EntityManager.instance.entities) && id !== this.socketId) {
                     EntityManager.instance.addEntity(
                         id,
-                        new Player(name, role, id, false, alive, 0, 0)
+                        new Player(name, role, id, false, alive)
                     )
-                } else {
+                } else if (id in EntityManager.instance.entities) {
                     EntityManager.instance.entities[id].username = name
                     EntityManager.instance.entities[id].role = role
 
                     if (EntityManager.instance.entities[id].alive && !alive)
                         EntityManager.instance.entities[id].kill()
+                    
+                    EntityManager.instance.entities[id].alive = alive
                 }
 
                 updatedPlayers[id] = true
@@ -116,6 +127,30 @@ class SocketManager {
                     player.y = lerp(player.y, y, 0.2)
                 }
             }
+        })
+
+        this.socket.on('starting', () => {
+            GameManager.instance.state = GameState.LOADING
+        })
+
+        this.socket.on('gameStarted', () => {
+            setTimeout(() => GameManager.instance.state = GameState.PLAYING, 1000)
+
+            const level = new Level("maps/lvl0.json")
+            EntityManager.instance.setLevel(level)
+        })
+
+        this.socket.on('gameEnded', (data) => {
+            const { won } = data
+
+            EntityManager.instance.setLevel(null)
+
+            GameManager.instance.state = GameState.RESULTS
+            GameManager.instance.winner = won ? "hide" : "seek"
+        })
+
+        this.socket.on('gameRestart', () => {
+            GameManager.instance.state = GameState.PREGAME
         })
     }
 }
@@ -270,8 +305,15 @@ class Renderer {
         this.fontSize(this.ctx.font, size)
         const metrics = this.ctx.measureText(text)
         this.ctx.restore()
-        return [metrics.width, metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent]
+        return { w: metrics.width, h: metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent }
     }
+}
+
+enum GameState {
+    PREGAME = "pregame",
+    LOADING = "loading",
+    PLAYING = "playing",
+    RESULTS = "results",
 }
 
 class GameManager {
@@ -280,7 +322,13 @@ class GameManager {
         return this._instance || (this._instance = new this())
     }
 
-    public started: boolean = true
+    public get started() {
+        return this.state === GameState.PLAYING
+    }
+
+    public state: GameState = GameState.PREGAME
+    public winner: "hide" | "seek" | null = null
+    public transitionAlpha: number = 0
     public debug: boolean = true
 }  
 
@@ -426,11 +474,8 @@ class Level extends Asset {
 
     constructor(filePath: string) {
         super(filePath)
-    }
 
-    // Load JSON lvl data
-    public async Load(gfx: Renderer) {    
-        await fetch(this.filePath)
+        fetch(this.filePath)
             .then((res) => res.json())
             .then((data: LevelData) => {
                 const { title, width, height, startX, startY, blocks } = data
@@ -497,18 +542,18 @@ class Level extends Asset {
 
 /** basic 2d camera to define viewport bounds */
 class Camera {
+    private static _instance: Camera
+    public static get instance() {
+        return this._instance || (this._instance = new this())
+    }
+
     public xView: number = 0
     public yView: number = 0
 
-    constructor(xView, yView) {
-        this.xView = xView
-        this.yView = yView
-    }
-
     // center the camera viewport on a position
-    public lookAt(x: number, y: number) {
-        this.xView = lerp(this.xView, x - GAME_WIDTH / 2, 0.1)
-        this.yView = lerp(this.yView, y - GAME_HEIGHT / 2, 0.1)
+    public lookAt(x: number, y: number, ease: number = 0.1) {
+        this.xView = lerp(this.xView, x - GAME_WIDTH / 2, ease)
+        this.yView = lerp(this.yView, y - GAME_HEIGHT / 2, ease)
 
         this.clamp()
     }
@@ -607,7 +652,7 @@ class EntityManager {
             delete this.entities[socketId]
     }
 
-    public setLevel(level: Level) {
+    public setLevel(level: Level | null) {
         this.level = level
     }
 }
@@ -653,8 +698,8 @@ class Player {
     public w: number
     public h: number
 
-    private deadX: number = 0
-    private deadY: number = 0
+    private deadX: number = -1000
+    private deadY: number = -1000
 
     get center() {
         return [this.x + this.w / 2, this.y + this.h / 2]
@@ -668,9 +713,9 @@ class Player {
     // interact
     public target: Player | null = null
 
-    constructor(username: string, role: Role, socketId: string, player: boolean, alive: boolean, x: number, y: number) {
-        this.x = x
-        this.y = y
+    constructor(username: string, role: Role, socketId: string, player: boolean, alive: boolean) {
+        this.x = 0
+        this.y = 0
         this.w = PLAYER_WIDTH
         this.h = PLAYER_HEIGHT
 
@@ -861,7 +906,7 @@ class Player {
 
             if (!this.alive && !EntityManager.instance.player.alive) {
                 gfx.ctx.save()
-                gfx.ctx.globalAlpha = 0.4
+                gfx.ctx.globalAlpha = 0.6
                 const sprite = this.animator.animations['ghost'][0]
                 if (sprite.loaded) {
                     gfx.ctx.drawImage(
@@ -917,7 +962,7 @@ class Player {
     }
 
     private keyDown(e: KeyboardEvent) {
-        e.preventDefault()
+        // e.preventDefault()
 
         switch (e.key) {
             case 'a':
@@ -987,6 +1032,10 @@ class Player {
             case 'e':
                 this.actionDown = false
                 break
+
+            case '`':
+                GameManager.instance.debug = !GameManager.instance.debug
+                break
         }
 
         SocketManager.instance.socket.emit('input', this.keys)
@@ -1008,8 +1057,21 @@ class Player {
 }
 
 window.onload = function () {
-    const form = document.getElementById("usernameForm") as HTMLFormElement
-    const input = document.getElementById("usernameInput") as HTMLInputElement
+    const form = document.createElement('form')
+
+    const label = document.createElement('label')
+    label.setAttribute('for', 'username')
+    label.innerText = 'Enter Name'
+    
+    const input = document.createElement('input')
+    input.setAttribute('id', 'username')
+
+    const button = document.createElement('button')
+    button.setAttribute('type', 'submit')
+    button.innerText = 'ENTER'
+
+    form.append(label, input, button)
+    document.body.appendChild(form)
 
     form.onsubmit = (e) => {
         e.preventDefault()
@@ -1020,81 +1082,109 @@ window.onload = function () {
         canvas.width = GAME_WIDTH
         canvas.height = GAME_HEIGHT
         canvas.style.background = "black"
+        canvas.style.width = "100%"
         document.body.appendChild(canvas)
 
         const ctx = canvas.getContext('2d')
 
-        const cam = new Camera(0, 0)
         const bg = new Background()
-
-        const lvl = new Level("maps/lvl0.json")
         
         class Amogus extends Game {
             public start() {
                 SocketManager.instance.init(input.value)
-
-                lvl.Load(this.gfx)
-                EntityManager.instance.setLevel(lvl)
             }
             
             protected update(dt: number) {
                 EntityManager.instance.update(dt)
 
                 const player = EntityManager.instance.player
-                if (!player) return
+                if (player) {
+                    const [pX, pY] = player.center
+                    Camera.instance.lookAt(pX, pY)
+                }
 
-                const [pX, pY] = player.center
-                cam.lookAt(pX, pY)
+                // update transition alpha
+                GameManager.instance.transitionAlpha = lerp(
+                    GameManager.instance.transitionAlpha,
+                    GameManager.instance.state === GameState.LOADING || GameManager.instance.state === GameState.RESULTS ? 1 : 0,
+                    0.03
+                )
             }
             
             protected draw(gfx: Renderer) {
                 gfx.clearScreen()
 
-                bg.draw(gfx, cam.xView, cam.yView)
-                lvl.draw(gfx, cam.xView, cam.yView)
+                bg.draw(gfx, Camera.instance.xView, Camera.instance.yView)
                 
-                EntityManager.instance.draw(gfx, cam.xView, cam.yView)
+                EntityManager.instance.level?.draw(gfx, Camera.instance.xView, Camera.instance.yView)
+                EntityManager.instance.draw(gfx, Camera.instance.xView, Camera.instance.yView)
+
+                // render transition state
+                gfx.ctx.save()
+                gfx.ctx.fillStyle = `rgba(0, 0, 0, ${GameManager.instance.transitionAlpha})`
+                gfx.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT)
+                gfx.ctx.restore()
+
+                // game status text
+                switch (GameManager.instance.state) {
+                    // num players ready
+                    case GameState.PREGAME: {
+                        const ready = Object.values(EntityManager.instance.entities).filter((e) => e.role === Role.READY).length
+                        const total = Object.keys(EntityManager.instance.entities).length
+                        const playersText = `${ready} / ${total} players ready`
+                        const { h: playersTextH } = gfx.measureText(playersText, 32)
+                        gfx.textOutline(playersText, GAME_WIDTH / 2, GAME_HEIGHT - 16, ready === total ? "#00ff00" : ready > 0 ? "yellow" : "red", "black", "center", 32, 4)
+
+                        const instructionText = `Press SPACE or E to READY`
+                        gfx.textOutline(instructionText, GAME_WIDTH / 2, GAME_HEIGHT - 16 - playersTextH, "white", "black", "center", 24, 4)
+                        break
+                    }
+
+                    // num players alive
+                    case GameState.PLAYING: {
+                        const alive = Object.values(EntityManager.instance.entities).filter((e) => e.alive).length
+                        const total = Object.keys(EntityManager.instance.entities).length
+                        const playersText = `${alive} / ${total} players alive`
+                        gfx.textOutline(playersText, GAME_WIDTH / 2, GAME_HEIGHT - 16, alive === total ? "#00ff00" : alive > 2 ? "yellow" : "red", "black", "center", 32, 4)
+                        break
+                    }
+
+                    // winner
+                    case GameState.RESULTS: {
+                        const winText = `${GameManager.instance.winner} has won`
+                        gfx.text(winText, GAME_WIDTH / 2, GAME_HEIGHT / 2, `rgba(255, 255, 255, ${GameManager.instance.transitionAlpha})`, "center", 48)
+                        break
+                    }
+                }
 
                 if (GameManager.instance.debug) this.drawDebug(gfx)
             }
 
             private drawDebug(gfx: Renderer) {
-                EntityManager.instance.drawDebug(gfx, cam.xView, cam.yView)
+                EntityManager.instance.drawDebug(gfx, Camera.instance.xView, Camera.instance.yView)
 
                 const player = EntityManager.instance.player
                 if (!player) return
 
                 // display player socket id
                 const socketText = `socket id: ${player.socketId}`
-                const [socketW, socketH] = gfx.measureText(socketText, 24)
+                const { h: socketH } = gfx.measureText(socketText, 24)
                 gfx.text(socketText, 8, socketH, "white", "left", 24)
+
+                // display game state
+                const gameText = `game state: ${GameManager.instance.state}`
+                const { h: gameH } = gfx.measureText(gameText, 24)
+                gfx.text(gameText, 8, socketH + gameH, "white", "left", 24)
 
                 // display player role
                 const roleText = `role: ${player.role}`
-                const [roleW, roleH] = gfx.measureText(roleText, 24)
-                gfx.text(roleText, 8, socketH + roleH, "white", "left", 24)
+                const { h: roleH } = gfx.measureText(roleText, 24)
+                gfx.text(roleText, 8, socketH + gameH + roleH, "white", "left", 24)
                 
                 // display player position
                 const posText = `x: ${Math.round(player.x)}, y: ${Math.round(player.y)}`
-                const [posW, posH] = gfx.measureText(posText, 24)
-                gfx.text(posText, 8, socketH + roleH + posH, "white", "left", 24)
-
-                // num players ready/alive
-                if (GameManager.instance.started) {
-                    const alive = Object.values(EntityManager.instance.entities).filter((e) => e.alive).length
-                    const total = Object.keys(EntityManager.instance.entities).length
-                    const playersText = `${alive} / ${total} players alive`
-                    gfx.textOutline(playersText, GAME_WIDTH / 2, GAME_HEIGHT - 16, alive === total ? "#00ff00" : alive > 2 ? "yellow" : "red", "black", "center", 32, 4)
-                } else {
-                    const ready = Object.values(EntityManager.instance.entities).filter((e) => e.role === Role.READY).length
-                    const total = Object.keys(EntityManager.instance.entities).length
-                    const playersText = `${ready} / ${total} players ready`
-                    const [playersTextW, playersTextH] = gfx.measureText(playersText, 32)
-                    gfx.textOutline(playersText, GAME_WIDTH / 2, GAME_HEIGHT - 16, ready === total ? "#00ff00" : ready > 0 ? "yellow" : "red", "black", "center", 32, 4)
-
-                    const instructionText = `Press SPACE or E to READY`
-                    gfx.textOutline(instructionText, GAME_WIDTH / 2, GAME_HEIGHT - 16 - playersTextH, "white", "black", "center", 24, 4)
-                }
+                const { h: posH } = gfx.measureText(posText, 24)
+                gfx.text(posText, 8, socketH + gameH + roleH + posH, "white", "left", 24)
             }
         }
 
