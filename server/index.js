@@ -68,6 +68,8 @@ function playerExists(socketId) {
 
 const TILE_SIZE = 160
 
+const TOTAL_GAME_TIME = 360
+
 class Level {
     constructor(title, width, height, startX, startY, blocks) {
         this.title = title
@@ -122,9 +124,11 @@ class GameSettings {
 
 let gameStarted = false
 let gameLoading = false
+let gameTime = TOTAL_GAME_TIME
 let gameSettings = new GameSettings()
 
-let gameLoop = null
+let gameLoopInterval = null
+let gameTimeInterval = null
 
 const TIMESTEP = 1000 / 60
 
@@ -253,7 +257,7 @@ io.on('connection', (socket) => {
         // start the server-side game loop
         if (!Object.keys(players).length) {
             loadLevel("lobby.json")
-            gameLoop = setInterval(stepPhysics, TIMESTEP)
+            gameLoopInterval = setInterval(stepPhysics, TIMESTEP)
         }
 
         const { name } = data
@@ -345,6 +349,16 @@ io.on('connection', (socket) => {
 function startGame() {
     gameLoading = false
     gameStarted = true
+    gameTime = TOTAL_GAME_TIME
+
+    // start game timer
+    gameTimeInterval = setInterval(() => {
+        gameTime = Math.max(0, gameTime - 1)
+        if (gameTime <= 0)
+            endGame(true)
+
+        io.sockets.emit('updateTime', { time: gameTime })
+    }, 1000)
 
     // load into the new game level
     loadLevel("game.json")
@@ -368,6 +382,8 @@ function startGame() {
 function endGame(won) {
     gameLoading = true
     gameStarted = false
+
+    clearInterval(gameTimeInterval)
 
     io.sockets.emit('gameEnded', { won })
     
@@ -402,8 +418,8 @@ function resetServer() {
     gameLoading = false
     gameSettings = new GameSettings()
 
-    if (gameLoading != null)
-        clearInterval(gameLoop)
+    clearInterval(gameLoopInterval)
+    clearInterval(gameTimeInterval)
 
     serverMessage("resetting server", "error")
 }

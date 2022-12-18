@@ -1,6 +1,7 @@
 const io = require("socket.io-client")
 
 /// CONSTANTS ///
+
 const GAME_WIDTH = 1280
 const GAME_HEIGHT = 720
 
@@ -17,6 +18,10 @@ const PLAYER_COLLIDER_SIZE = 64
 const PLAYER_COLLIDER_OFFSET = 16
 
 const MAX_DISTANCE_RECONCILIATION = 128
+
+const TOTAL_GAME_TIME = 360
+const KILL_COOLDOWN = 30
+
 /////////////////
 
 /// utility functions ///
@@ -145,7 +150,10 @@ class SocketManager {
         })
 
         this.socket.on('gameStarted', () => {
-            setTimeout(() => GameManager.instance.state = GameState.PLAYING, 1000)
+            setTimeout(() => {
+                GameManager.instance.state = GameState.PLAYING
+                EntityManager.instance.player?.setCooldownInterval()
+            }, 1000)
 
             const level = new Level("maps/game.json")
             EntityManager.instance.setLevel(level)
@@ -154,7 +162,7 @@ class SocketManager {
         this.socket.on('gameEnded', (data) => {
             const { won } = data
 
-            EntityManager.instance.setLevel(null)
+            EntityManager.instance.player?.clearCooldownInterval()
 
             GameManager.instance.state = GameState.RESULTS
             GameManager.instance.winner = won ? "hide" : "seek"
@@ -166,6 +174,11 @@ class SocketManager {
 
             GameManager.instance.state = GameState.LOADING
             setTimeout(() => GameManager.instance.state = GameState.PREGAME, 1000)
+        })
+
+        this.socket.on('updateTime', (data) => {
+            const { time } = data
+            GameManager.instance.timeLeft = time
         })
     }
 }
@@ -184,7 +197,6 @@ abstract class Game {
     constructor(ctx: CanvasRenderingContext2D) {
         this.gfx = new Renderer(ctx)
     }
-
     
     /** call to begin the game loop */
     public run(currentTime: number = performance.now()) {
@@ -343,8 +355,25 @@ class GameManager {
 
     public state: GameState = GameState.PREGAME
     public winner: "hide" | "seek" | null = null
+    public timeLeft: number = 0
+
     public transitionAlpha: number = 0
-    public debug: boolean = true
+
+    public fullscreen: boolean = false
+    public debug: boolean = false
+
+    // ref to canvas for fullscreen
+    private canvasRef: HTMLCanvasElement | null = null
+    public set canvas(c: HTMLCanvasElement) {
+        this.canvasRef = c
+    }
+
+    public toggleFullscreen() {
+        this.fullscreen = !this.fullscreen
+
+        if (this.fullscreen) this.canvasRef?.requestFullscreen()
+        else document.exitFullscreen()
+    }
 }  
 
 /** base asset class to handle file loading */
@@ -530,8 +559,8 @@ class Level extends Asset {
 
                     if (block) {
                         gfx.ctx.save()
-                        gfx.ctx.fillStyle = "blue"
-                        gfx.ctx.strokeStyle = "blue"
+                        gfx.ctx.fillStyle = 'black'
+                        gfx.ctx.strokeStyle = 'black'
                         gfx.ctx.lineWidth = 1
                         gfx.ctx.beginPath()
                         gfx.ctx.rect(
@@ -747,6 +776,8 @@ class Player {
     // animation
     private animator: Animator
     private facing: boolean = true
+    private useSprite: Sprite
+    private killSprite: Sprite
 
     // transform
     public x: number
@@ -768,6 +799,8 @@ class Player {
 
     // interact
     public target: Player | null = null
+    public cooldown: number = KILL_COOLDOWN
+    private cooldownInterval: ReturnType<typeof setInterval>
 
     constructor(username: string, role: Role, socketId: string, player: boolean, alive: boolean) {
         this.x = 0
@@ -806,6 +839,9 @@ class Player {
             ghost: [new Sprite("sprites/Ghost0001.png")],
             dead: [new Sprite("sprites/dead.png")],
         })
+
+        this.useSprite = new Sprite("sprites/use.png")
+        this.killSprite = new Sprite("sprites/kill.png")
     }
     
     public update(dt: number) {
@@ -908,11 +944,15 @@ class Player {
                     }
                 })
                 
-                if (!!this.target && this.hasPressedAction) {
+                if (this.hasPressedAction) {
                     this.hasPressedAction = false
 
-                    this.target.interact()
-                    this.target = null
+                    if (!!this.target && this.cooldown <= 0) {
+                        this.target.interact()
+                        this.target = null
+
+                        this.cooldown = KILL_COOLDOWN
+                    }
                 }
             }
         } else {
@@ -928,13 +968,6 @@ class Player {
     public draw(gfx: Renderer, xView: number, yView: number) {
         const sprite = this.animator.currentSprite
         if (sprite.loaded) {
-            gfx.ctx.save()
-
-            if (!this.facing) {
-                // gfx.ctx.translate(GAME_WIDTH, 0)
-                // gfx.ctx.scale(-1, 1)
-            }
-
             gfx.textOutline(
                 this.username,
                 (this.alive ? this.x : this.deadX) + this.w / 2 - xView,
@@ -945,6 +978,13 @@ class Player {
                 24,
                 4
             )
+
+            gfx.ctx.save()
+
+            if (!this.facing) {
+                // gfx.ctx.translate(GAME_WIDTH, 0)
+                // gfx.ctx.scale(-1, 1)
+            }
 
             gfx.ctx.drawImage(
                 sprite.image,
@@ -1015,6 +1055,38 @@ class Player {
             2,
             "#ff0000"
         )
+    }
+
+    public drawUI(gfx: Renderer) {
+        if (!this.useSprite.loaded || !this.killSprite.loaded) return
+
+        switch (this.role) {
+            case Role.HIDE:
+                break
+            
+            case Role.SEEK:
+                gfx.ctx.save()
+                gfx.ctx.globalAlpha = this.cooldown > 0 ? 0.5 : 1
+                gfx.ctx.drawImage(
+                    this.killSprite.image,
+                    GAME_WIDTH - this.killSprite.image.width - 8,
+                    GAME_HEIGHT - this.killSprite.image.height - 8
+                )
+                gfx.ctx.restore()
+
+                if (this.cooldown > 0)
+                    gfx.textOutline(
+                        this.cooldown.toFixed(0).toString(),
+                        GAME_WIDTH - this.killSprite.image.width / 2 - 8,
+                        GAME_HEIGHT - this.killSprite.image.height / 2 - 8,
+                        "white",
+                        "black",
+                        "center",
+                        48,
+                        4
+                    )
+                break
+        }
     }
 
     private keyDown(e: KeyboardEvent) {
@@ -1089,12 +1161,30 @@ class Player {
                 this.actionDown = false
                 break
 
+            // toggle fullscreen
+            case 'f':
+                GameManager.instance.toggleFullscreen()
+                break
+
+            // activate debug mode
             case '`':
                 GameManager.instance.debug = !GameManager.instance.debug
                 break
         }
 
         SocketManager.instance.socket.emit('input', this.keys)
+    }
+
+    public setCooldownInterval() {
+        this.cooldown = KILL_COOLDOWN
+        this.cooldownInterval = setInterval(
+            () => this.cooldown = Math.max(0, this.cooldown - 1),
+            1000
+        )
+    }
+
+    public clearCooldownInterval() {
+        clearInterval(this.cooldownInterval)
     }
 
     public interact() {
@@ -1268,8 +1358,20 @@ function drawLights(gfx: Renderer, xView: number, yView: number) {
     const { x: pX, y: pY } = player.center
     const PLAYER_Y_OFFSET = PLAYER_COLLIDER_SIZE / 2
 
-	const polygon = getSightPolygon(pX, pY + PLAYER_Y_OFFSET, xView, yView, level)
-    drawLightsPolygon(gfx, polygon, "#fff", xView, yView)
+    // const fuzzyRadius = 32
+	const polygons = [getSightPolygon(pX, pY + PLAYER_Y_OFFSET, xView, yView, level)]
+    // for(let angle=0; angle < Math.PI * 2; angle += (Math.PI * 2) / 10) {
+	// 	const dx = Math.cos(angle) * fuzzyRadius
+	// 	const dy = Math.sin(angle) * fuzzyRadius
+	// 	polygons.push(getSightPolygon(pX + dx, pY + PLAYER_Y_OFFSET + dy, xView, yView, level))
+	// }
+
+    // gfx.ctx.save()
+    // gfx.ctx.filter = "blur(16px)"
+    // for (let i=1; i < polygons.length; i++)
+	// 	drawLightsPolygon(gfx, polygons[i], "rgba(255,255,255,0.3)", xView, yView)
+    // gfx.ctx.restore()
+    drawLightsPolygon(gfx, polygons[0], "#fff", xView, yView)
 }
 
 function drawLightsDebug(gfx: Renderer, xView: number, yView: number) {
@@ -1308,7 +1410,7 @@ function drawSpotlight(gfx: Renderer, xView: number, yView: number) {
     )
 
     spotlight.addColorStop(player.role === Role.SEEK ? 0.1 : 0.2, 'transparent')
-    spotlight.addColorStop(player.role === Role.SEEK ? 0.5 : 1.0, 'black')
+    spotlight.addColorStop(player.role === Role.SEEK ? 0.4 : 1.0, 'black')
 
     gfx.ctx.fillStyle = spotlight
     gfx.ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT)
@@ -1316,24 +1418,26 @@ function drawSpotlight(gfx: Renderer, xView: number, yView: number) {
 
 window.onload = function () {
     const form = document.createElement('form')
-
-    const label = document.createElement('label')
-    label.className = 'label'
-    label.htmlFor = 'username'
-    label.innerText = 'Enter Name'
+    form.style.width = GAME_WIDTH + 'px'
+    form.style.height = GAME_HEIGHT + 'px'
+    form.style.maxWidth = '100%'
+    form.style.display = 'flex'
+    form.style.alignItems = 'center'
+    form.style.justifyContent = 'center'
     
     const input = document.createElement('input')
     input.className = 'input'
     input.id = 'username'
+    input.placeholder = 'Enter a name...'
     input.required = true
     input.autocomplete = 'off'
-
+    
     const button = document.createElement('button')
     button.className = 'button'
     button.type = 'submit'
     button.innerText = 'ENTER'
 
-    form.append(label, input, button)
+    form.append(input, button)
     document.body.appendChild(form)
 
     form.onsubmit = (e) => {
@@ -1356,6 +1460,8 @@ window.onload = function () {
 
         class Amogus extends Game {
             public start() {
+                GameManager.instance.canvas = canvas
+
                 SocketManager.instance.init(input.value)
 
                 const level = new Level("maps/lobby.json")
@@ -1400,6 +1506,45 @@ window.onload = function () {
                 if (shouldRenderShadows) {
                     gfx.ctx.globalCompositeOperation = "source-over"
                     drawSpotlight(gfx, Camera.instance.xView, Camera.instance.yView)
+                }
+
+                EntityManager.instance.player?.drawUI(gfx)
+
+                if (GameManager.instance.started) {
+                    const time = GameManager.instance.timeLeft
+                    const mins = ~~(time / 60)
+                    const secs = time - mins * 60
+                    gfx.rectangle(
+                        GAME_WIDTH / 2 - GAME_WIDTH / 8,
+                        12,
+                        GAME_WIDTH / 4,
+                        40,
+                        'gray'
+                    )
+                    gfx.rectangle(
+                        GAME_WIDTH / 2 - GAME_WIDTH / 8 + 4,
+                        16,
+                        GAME_WIDTH / 4 - 8,
+                        32,
+                        'black'
+                    )
+                    gfx.rectangle(
+                        GAME_WIDTH / 2 - GAME_WIDTH / 8 + 4,
+                        16,
+                        (GAME_WIDTH / 4 - 4) * GameManager.instance.timeLeft / TOTAL_GAME_TIME,
+                        32,
+                        `rgb(${lerp(255, 0, GameManager.instance.timeLeft / TOTAL_GAME_TIME)}, ${lerp(0, 255, GameManager.instance.timeLeft / TOTAL_GAME_TIME)}, 0)`
+                    )
+                    gfx.textOutline(
+                        `${mins}:${secs < 10 ? '0' + secs : secs}`,
+                        GAME_WIDTH / 2,
+                        40,
+                        'white',
+                        'black',
+                        'center',
+                        24,
+                        4
+                    )
                 }
 
                 // render transition state
