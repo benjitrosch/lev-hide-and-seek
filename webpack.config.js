@@ -20,10 +20,5 @@ module.exports = {
         exclude: /node_modules/
       }
     ]
-  },
-  devServer: {
-    static: path.join(__dirname, "build"),
-    compress: true,
-    port: 4000,
-  },
+  }
 }
