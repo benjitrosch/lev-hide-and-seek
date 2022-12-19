@@ -36,10 +36,13 @@ const { stepPhysics } = require('../shared/physics')
 /// player data //////////////
 
 class Player {
-    constructor(name, role) {
+    constructor(name, hue, brightness, role) {
         this.name = name
         this.role = role
         this.alive = true
+
+        this.hue = hue
+        this.brightness = brightness
     }
 }
 
@@ -184,9 +187,9 @@ io.on('connection', (socket) => {
             gameLoopInterval = setInterval(gameLoop, TIMESTEP)
         }
 
-        const { name } = data
+        const { name, hue, brightness } = data
 
-        players[socket.id] = new Player(name, ROLE_NONE)
+        players[socket.id] = new Player(name, hue, brightness, ROLE_NONE)
         playersInputs[socket.id] = 0
         if (level) playersPositions[socket.id] = new Position(level.startX, level.startY)
         else playersPositions[socket.id] = new Position(0, 0)

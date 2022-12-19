@@ -33,6 +33,8 @@ export default class Player {
     // online
     public socketId: string
     public username: string
+    public hue: number
+    public brightness: number
     
     // status
     public player: boolean
@@ -74,7 +76,7 @@ export default class Player {
     public cooldown: number = KILL_COOLDOWN
     private cooldownInterval: ReturnType<typeof setInterval>
 
-    constructor(username: string, role: number, socketId: string, player: boolean, alive: boolean) {
+    constructor(username: string, hue: number, brightness: number, role: number, socketId: string, player: boolean, alive: boolean) {
         this.x = 0
         this.y = 0
         this.w = PLAYER_WIDTH
@@ -83,6 +85,9 @@ export default class Player {
         this.username = username
         this.socketId = socketId
         this.role = role
+
+        this.hue = hue
+        this.brightness = brightness
 
         this.player = player
         this.alive = alive
@@ -201,6 +206,8 @@ export default class Player {
                 // gfx.ctx.scale(-1, 1)
             }
 
+            gfx.ctx.filter = `hue-rotate(${this.hue}deg) brightness(${this.brightness})`
+            
             gfx.ctx.drawImage(
                 sprite.image,
                 0,
@@ -218,6 +225,7 @@ export default class Player {
             if (!this.alive && !EntityManager.instance.player.alive) {
                 gfx.ctx.save()
                 gfx.ctx.globalAlpha = 0.6
+                gfx.ctx.filter = `hue-rotate(${this.hue}deg) brightness(${this.brightness})`
                 const sprite = this.animator.animations['ghost'][0]
                 if (sprite.loaded) {
                     gfx.ctx.drawImage(

@@ -15,28 +15,21 @@ import Renderer from './Renderer'
 import SocketManager from './SocketManager'
 
 window.onload = function () {
-    const form = document.createElement('form')
-    form.style.width = GAME_WIDTH + 'px'
-    form.style.height = GAME_HEIGHT + 'px'
-    form.style.maxWidth = '100%'
+    const form = document.getElementById('user') as HTMLFormElement
     form.style.display = 'flex'
     form.style.alignItems = 'center'
     form.style.justifyContent = 'center'
     
-    const input = document.createElement('input')
-    input.className = 'input'
-    input.id = 'username'
-    input.placeholder = 'Enter a name...'
-    input.required = true
-    input.autocomplete = 'off'
+    const input = document.getElementById('username') as HTMLInputElement
     
-    const button = document.createElement('button')
-    button.className = 'button'
-    button.type = 'submit'
-    button.innerText = 'ENTER'
-
-    form.append(input, button)
-    document.body.appendChild(form)
+    const hueSlider = document.getElementById('hue') as HTMLInputElement
+    hueSlider.value = Math.floor(Math.random() * 360).toString()
+    const brightnessSlider = document.getElementById('brightness') as HTMLInputElement
+    brightnessSlider.value = (Math.floor(Math.random() * 3) + 1).toString()
+    const previewImage = document.getElementById('preview') as HTMLImageElement
+    previewImage.style.filter = `hue-rotate(${hueSlider.value}deg) brightness(${brightnessSlider.value})`
+    const setPreviewFilterStyle = () => previewImage.style.filter = `hue-rotate(${hueSlider.value}deg) brightness(${brightnessSlider.value})`
+    hueSlider.oninput = brightnessSlider.oninput = setPreviewFilterStyle
 
     form.onsubmit = (e) => {
         if (input.value.length < 3 || input.value.length > 16) return
@@ -50,6 +43,7 @@ window.onload = function () {
         canvas.height = buffer.height = GAME_HEIGHT
         canvas.style.background = "black"
         canvas.style.width = "100%"
+        canvas.style.maxHeight = "100%"
         document.body.appendChild(canvas)
 
         const ctx = canvas.getContext('2d')
@@ -60,7 +54,7 @@ window.onload = function () {
             public start() {
                 GameManager.instance.canvas = canvas
 
-                SocketManager.instance.init(input.value)
+                SocketManager.instance.init(input.value, Number(hueSlider.value), Number(brightnessSlider.value))
 
                 const level = new Level("maps/lobby.json")
                 EntityManager.instance.setLevel(level)
@@ -176,7 +170,7 @@ window.onload = function () {
                     }
 
                     case GameState.LOADING: {
-                        if (EntityManager.instance.player && EntityManager.instance.player.role !== ROLE_READY) {
+                        if (EntityManager.instance.player && EntityManager.instance.player.role !== ROLE_READY && !GameManager.instance.winner) {
                             const roleText = `you are ${EntityManager.instance.player.role}`
                             gfx.text(roleText, GAME_WIDTH / 2, GAME_HEIGHT / 2, `rgba(255, 255, 255, ${GameManager.instance.transitionAlpha})`, "center", 48)
                         }

@@ -21,21 +21,21 @@ export default class SocketManager {
         return this.socket.id
     }
 
-    public init(name: string) {
+    public init(name: string, hue: number, brightness: number) {
         this.socket = io()
 
         // connect to lobby
         this.socket.on('connect', () => {
             // add self to entity manager and
             // emit 'join' socket event
-            this.socket.emit('join', { name })
+            this.socket.emit('join', { name, hue, brightness })
         })
 
         this.socket.on('returnPlayer', (player) => {
-            const { name, role, socketId, alive } = player
+            const { name, hue, brightness, role, socketId, alive } = player
             EntityManager.instance.addEntity(
                 socketId,
-                new Player(name, role, socketId, true, alive)
+                new Player(name, hue, brightness, role, socketId, true, alive)
             )
 
             // if the returned player has a spectator role,
@@ -53,13 +53,13 @@ export default class SocketManager {
             const updatedPlayers: { [socketId: string]: boolean } = {}
 
             for (let id in players) {
-                const { name, role, alive } = players[id]
+                const { name, hue, brightness, role, alive } = players[id]
 
                 // add new players to entity manager
                 if (!(id in EntityManager.instance.entities) && id !== this.socketId) {
                     EntityManager.instance.addEntity(
                         id,
-                        new Player(name, role, id, false, alive)
+                        new Player(name, hue, brightness, role, id, false, alive)
                     )
                 } else if (id in EntityManager.instance.entities) {
                     EntityManager.instance.entities[id].username = name
