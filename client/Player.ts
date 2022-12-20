@@ -99,6 +99,7 @@ export default class Player {
 
         this.animator = new Animator("idle", {
             idle: [new Sprite("sprites/idle.png")],
+            idleLeft: [new Sprite("sprites/idleLeft.png")],
             walk: [
                 new Sprite("sprites/Walk0001.png"),
                 new Sprite("sprites/Walk0002.png"),
@@ -113,7 +114,22 @@ export default class Player {
                 new Sprite("sprites/Walk0011.png"),
                 new Sprite("sprites/Walk0012.png"),
             ],
+            walkLeft: [
+                new Sprite("sprites/Walk0001Left.png"),
+                new Sprite("sprites/Walk0002Left.png"),
+                new Sprite("sprites/Walk0003Left.png"),
+                new Sprite("sprites/Walk0004Left.png"),
+                new Sprite("sprites/Walk0005Left.png"),
+                new Sprite("sprites/Walk0006Left.png"),
+                new Sprite("sprites/Walk0007Left.png"),
+                new Sprite("sprites/Walk0008Left.png"),
+                new Sprite("sprites/Walk0009Left.png"),
+                new Sprite("sprites/Walk0010Left.png"),
+                new Sprite("sprites/Walk0011Left.png"),
+                new Sprite("sprites/Walk0012Left.png"),
+            ],
             ghost: [new Sprite("sprites/Ghost0001.png")],
+            ghostLeft: [new Sprite("sprites/Ghost0001Left.png")],
             dead: [new Sprite("sprites/dead.png")],
         })
 
@@ -136,8 +152,8 @@ export default class Player {
         if (!!dir.x) this.facing = dir.x > 0
 
         if (this.alive) {
-            if (!!dir.x || !!dir.y) this.animator.setAnimation("walk")
-            else this.animator.setAnimation("idle")
+            if (!!dir.x || !!dir.y) this.animator.setAnimation(this.facing ? "walk" : "walkLeft")
+            else this.animator.setAnimation(this.facing ? "idle" : "idleLeft")
         }
 
         // interaction logic
@@ -226,7 +242,7 @@ export default class Player {
                 gfx.ctx.save()
                 gfx.ctx.globalAlpha = 0.6
                 gfx.ctx.filter = `hue-rotate(${this.hue}deg) brightness(${this.brightness})`
-                const sprite = this.animator.animations['ghost'][0]
+                const sprite = this.animator.animations[this.facing ? 'ghost' : 'ghostLeft'][0]
                 if (sprite.loaded) {
                     gfx.ctx.drawImage(
                         sprite.image,
