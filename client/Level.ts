@@ -20,7 +20,6 @@ type LevelData = {
     height: number
     startX: number
     startY: number
-    blocks: number[]
     polygons: { x: number, y: number }[][]
 }
 
@@ -41,7 +40,6 @@ export default class Level extends Asset {
     public startX: number = 0
     public startY: number = 0
 
-    public blocks: boolean[] = []
     public polygons: Polygon[]
 
     private sprite: Sprite
@@ -53,7 +51,7 @@ export default class Level extends Asset {
         fetch(this.filePath)
             .then((res) => res.json())
             .then((data: LevelData) => {
-                const { title, bg, width, height, startX, startY, blocks, polygons } = data
+                const { title, bg, width, height, startX, startY, polygons } = data
 
                 this.title = title
                 
@@ -63,7 +61,6 @@ export default class Level extends Asset {
                 this.startX = startX
                 this.startY = startY
         
-                this.blocks = blocks.map((b) => !!b)
                 this.polygons = polygons.map((polygon) => (
                     new Polygon(polygon.map((vertex) => (
                         new Vector2(vertex.x, vertex.y)
@@ -91,25 +88,6 @@ export default class Level extends Asset {
             
             gfx.ctx.drawImage(this.sprite.image, xView, yView, w, h, 0, 0, w, h)
         }
-        
-        // render individual polygons
-        if (this.loaded)
-        {
-            // const viewportAABB = new Rectangle(xView, yView, GAME_WIDTH, GAME_HEIGHT)
-            // for (let i = 0; i < this.polygons.length; i++) {
-            //     const polygon = this.polygons[i]
-            //     if (checkAABBs(polygon.aabb, viewportAABB)) {
-            //         gfx.ctx.fillStyle = '#0000ff33'
-            //         gfx.ctx.beginPath()
-            //         gfx.ctx.moveTo(polygon.vertices[0].x - xView, polygon.vertices[0].y - yView)
-            //         polygon.vertices.slice(1).forEach((v) => {
-            //             gfx.ctx.lineTo(v.x - xView, v.y - yView)
-            //         })
-            //         gfx.ctx.closePath()
-            //         gfx.ctx.fill()
-            //     }
-            // }
-        }
     }
 
     public drawDebug(gfx: Renderer, xView: number, yView: number) {
@@ -131,8 +109,28 @@ export default class Level extends Asset {
                     gfx.ctx.strokeStyle = 'red'
                     gfx.ctx.lineWidth = 2
                     gfx.ctx.beginPath()
+                    gfx.ctx.save()
+                    gfx.text(
+                        `(${polygon.vertices[0].x}, ${polygon.vertices[0].y})`,
+                        polygon.vertices[0].x - xView,
+                        polygon.vertices[0].y - yView,
+                        '#ffffffaa',
+                        'center',
+                        16
+                    )
+                    gfx.ctx.restore()
                     gfx.ctx.moveTo(polygon.vertices[0].x - xView, polygon.vertices[0].y - yView)
                     polygon.vertices.slice(1).forEach((v) => {
+                        gfx.ctx.save()
+                        gfx.text(
+                            `(${v.x}, ${v.y})`,
+                            v.x - xView,
+                            v.y - yView,
+                            '#ffffffaa',
+                            'center',
+                            16
+                        )
+                        gfx.ctx.restore()
                         gfx.ctx.lineTo(v.x - xView, v.y - yView)
                     })
                     gfx.ctx.closePath()

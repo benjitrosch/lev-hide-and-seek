@@ -21,7 +21,7 @@ function stepPhysics(player, x, y, input, level, dt) {
     const dX = dir.x * PLAYER_SPEED * dt
     const dY = dir.y * PLAYER_SPEED * dt
 
-    if (player.alive && level) {
+    if (player.alive && level && level.polygons && level.polygons.length) {
         const { x: newX, y: newY } = broadPhaseCollisionDetection(
             { x, y },
             { x: x + dX, y: y + dY },

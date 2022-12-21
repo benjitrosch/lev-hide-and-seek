@@ -1,12 +1,15 @@
 import {
     GAME_WIDTH,
     GAME_HEIGHT,
-    TILE_SIZE,
     PLAYER_COLLIDER_SIZE,
 } from '../shared/constants'
 import {
     ROLE_SEEK
 } from '../shared/enums'
+import {
+    Rectangle,
+    checkAABBs
+} from '../shared/collision'
 
 import EntityManager from './EntityManager'
 import Level from './Level'
@@ -62,37 +65,25 @@ type LightsPolygon = {
 }[]
 
 function getSightPolygon(pX: number, pY: number, xView: number, yView: number, level: Level) {
-    let w = GAME_WIDTH
-    let h = GAME_HEIGHT
-
-    if (level.width * TILE_SIZE - xView < w)
-        w = level.width * TILE_SIZE - xView
-    if (level.height * TILE_SIZE - yView < h)
-        h = level.height * TILE_SIZE - yView
-
-    const startX = Math.max(0, ~~(xView / TILE_SIZE))
-    const startY = Math.max(0, ~~(yView / TILE_SIZE))
-    
-    const endX = Math.min(level.rows, startX + w / TILE_SIZE + 1)
-    const endY = Math.min(level.cols, startY + h / TILE_SIZE + 1)
+    const viewportAABB = new Rectangle(xView, yView, GAME_WIDTH, GAME_HEIGHT)
 
     const segments: {
         a: { x: number, y: number },
         b: { x: number, y: number }
     }[] = []
 
-    for (let y = startY; y < endY; y++) {
-        for (let x = startX; x < endX; x++) {
-            if (level.blocks[x + y * level.rows]) {
-                segments.push(
-                    { a: { x: x * TILE_SIZE, y: y * TILE_SIZE }, b: { x: x * TILE_SIZE + TILE_SIZE, y: y * TILE_SIZE } },
-                    { a: { x: x * TILE_SIZE + TILE_SIZE, y: y * TILE_SIZE }, b: { x: x * TILE_SIZE + TILE_SIZE, y: y * TILE_SIZE + TILE_SIZE } },
-                    { a: { x: x * TILE_SIZE + TILE_SIZE, y: y * TILE_SIZE + TILE_SIZE }, b: { x: x * TILE_SIZE, y: y * TILE_SIZE + TILE_SIZE } },
-                    { a: { x: x * TILE_SIZE, y: y * TILE_SIZE + TILE_SIZE }, b: { x: x * TILE_SIZE, y: y * TILE_SIZE } }
-                )
-            }
-        }
-    }
+    // if (level && level.polygons) {
+    //     level.polygons.forEach((polygon) => {
+    //         if (checkAABBs(polygon.aabb, viewportAABB)) {
+    //             let prev = polygon.vertices[0]
+    //             polygon.vertices.slice(1).forEach((vertex) => {
+    //                 segments.push({ a: { x: prev.x, y: prev.y }, b: { x: vertex.x, y: vertex.y } })
+    //                 prev = vertex
+    //             })
+    //             segments.push({ a: { x: prev.x, y: prev.y }, b: { x: polygon.vertices[0].x, y: polygon.vertices[0].y } })
+    //         }
+    //     })
+    // }
 
     // add screen border
     segments.push({ a: { x: xView, y: yView }, b: { x: xView + GAME_WIDTH, y: yView } })

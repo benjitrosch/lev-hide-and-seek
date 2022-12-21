@@ -69,7 +69,7 @@ function playerExists(socketId) {
 /// level data ///////////////
 
 class Level {
-    constructor(title, width, height, startX, startY, blocks, polygons) {
+    constructor(title, width, height, startX, startY, polygons) {
         this.title = title
 
         this.width = width
@@ -78,17 +78,11 @@ class Level {
         this.startX = startX
         this.startY = startY
 
-        this.blocks = blocks.map((b) => !!b)
         this.polygons = polygons.map((polygon) => (
             new Polygon(polygon.map((vertex) => (
                 new Vector2(vertex.x, vertex.y))
             ))
         ))
-    }
-
-    check(x, y) {
-        const rows = ~~(this.width / TILE_SIZE)
-        return this.blocks[x + y * rows]
     }
 }
 
@@ -96,9 +90,9 @@ let level = null
 
 function loadLevel(name) {
     const data = fs.readFileSync(path.join(__dirname, '../public/maps/' + name))
-    const { title, width, height, startX, startY, blocks, polygons } = JSON.parse(data)
+    const { title, width, height, startX, startY, polygons } = JSON.parse(data)
 
-    level = new Level(title, width, height, startX, startY, blocks, polygons)
+    level = new Level(title, width, height, startX, startY, polygons)
 
     // move all players to starting location
     for (let id in players) {
