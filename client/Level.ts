@@ -95,20 +95,20 @@ export default class Level extends Asset {
         // render individual polygons
         if (this.loaded)
         {
-            const viewportAABB = new Rectangle(xView, yView, GAME_WIDTH, GAME_HEIGHT)
-            for (let i = 0; i < this.polygons.length; i++) {
-                const polygon = this.polygons[i]
-                if (checkAABBs(polygon.aabb, viewportAABB)) {
-                    gfx.ctx.fillStyle = '#0000ff33'
-                    gfx.ctx.beginPath()
-                    gfx.ctx.moveTo(polygon.vertices[0].x - xView, polygon.vertices[0].y - yView)
-                    polygon.vertices.slice(1).forEach((v) => {
-                        gfx.ctx.lineTo(v.x - xView, v.y - yView)
-                    })
-                    gfx.ctx.closePath()
-                    gfx.ctx.fill()
-                }
-            }
+            // const viewportAABB = new Rectangle(xView, yView, GAME_WIDTH, GAME_HEIGHT)
+            // for (let i = 0; i < this.polygons.length; i++) {
+            //     const polygon = this.polygons[i]
+            //     if (checkAABBs(polygon.aabb, viewportAABB)) {
+            //         gfx.ctx.fillStyle = '#0000ff33'
+            //         gfx.ctx.beginPath()
+            //         gfx.ctx.moveTo(polygon.vertices[0].x - xView, polygon.vertices[0].y - yView)
+            //         polygon.vertices.slice(1).forEach((v) => {
+            //             gfx.ctx.lineTo(v.x - xView, v.y - yView)
+            //         })
+            //         gfx.ctx.closePath()
+            //         gfx.ctx.fill()
+            //     }
+            // }
         }
     }
 
@@ -125,8 +125,9 @@ export default class Level extends Asset {
                         polygon.aabb.width,
                         polygon.aabb.height,
                         2,
-                        'yellow'
+                        '#ffff0055'
                     )
+                    gfx.ctx.fillStyle = '#0000ff22'
                     gfx.ctx.strokeStyle = 'red'
                     gfx.ctx.lineWidth = 2
                     gfx.ctx.beginPath()
@@ -136,6 +137,7 @@ export default class Level extends Asset {
                     })
                     gfx.ctx.closePath()
                     gfx.ctx.stroke()
+                    gfx.ctx.fill()
                 }
             }
         }  
