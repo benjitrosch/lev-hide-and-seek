@@ -53,6 +53,19 @@ window.onload = function () {
         class Amogus extends Game {
             public start() {
                 GameManager.instance.canvas = canvas
+                document.addEventListener('keydown', function (e) {
+                    switch (e.key) {
+                        // toggle fullscreen
+                        case 'f':
+                            GameManager.instance.toggleFullscreen()
+                            break
+
+                        // activate debug mode
+                        case '`':
+                            GameManager.instance.debug = !GameManager.instance.debug
+                            break
+                    }
+                })
 
                 SocketManager.instance.init(input.value, Number(hueSlider.value), Number(brightnessSlider.value))
 

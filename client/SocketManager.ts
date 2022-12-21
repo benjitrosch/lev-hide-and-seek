@@ -85,7 +85,7 @@ export default class SocketManager {
         // simulate smooth client side movement
         this.socket.on('updateInputs', (inputs) => {
             for (let id in inputs) {
-                if (id in EntityManager.instance.entities) {
+                if (id in EntityManager.instance.entities && id !== this.socketId) {
                     EntityManager.instance.entities[id].keys = inputs[id]
                 }
             }

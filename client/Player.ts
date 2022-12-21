@@ -29,6 +29,8 @@ import { GameManager } from './Game'
 import Renderer from './Renderer'
 import SocketManager from './SocketManager'
 
+const MAX_KEY_DELAY = 100
+
 export default class Player {
     // online
     public socketId: string
@@ -43,6 +45,8 @@ export default class Player {
 
     // keyboard events
     public keys: number = 0
+    private keysPressed: { [key: string]: boolean } = {}
+    private keysReleaseTimes: { [key: string]: number } = {}
     private actionDown: boolean = false
     private hasPressedKey: boolean = false
     private hasPressedAction: boolean = false
@@ -93,8 +97,8 @@ export default class Player {
         this.alive = alive
 
         if (this.player) {
-            document.onkeydown = (e) => this.keyDown(e)
-            document.onkeyup = (e) => this.keyUp(e)
+            document.addEventListener('keydown', (e) => { this.keyDown(e) })
+            document.addEventListener('keyup', (e) => { this.keyUp(e) })
         }
 
         this.animator = new Animator("idle", {
@@ -128,8 +132,8 @@ export default class Player {
                 new Sprite("sprites/Walk0011Left.png"),
                 new Sprite("sprites/Walk0012Left.png"),
             ],
-            ghost: [new Sprite("sprites/Ghost0001.png")],
-            ghostLeft: [new Sprite("sprites/Ghost0001Left.png")],
+            ghost: [new Sprite("sprites/ghost0001.png")],
+            ghostLeft: [new Sprite("sprites/ghost0001Left.png")],
             dead: [new Sprite("sprites/dead.png")],
         })
 
@@ -329,7 +333,8 @@ export default class Player {
     }
 
     private keyDown(e: KeyboardEvent) {
-        // e.preventDefault()
+        e.preventDefault()
+        if (e.repeat) return
 
         switch (e.key) {
             case 'a':
@@ -361,11 +366,15 @@ export default class Player {
                 if (!this.actionDown) this.hasPressedAction = true
                 this.actionDown = true
                 break
-
-            case 'r':
-                this.role = ROLE_SEEK
-                break
         }
+
+        // if keydown was too soon after last release
+        // return and do not send input to server
+        const time = new Date().getTime()
+        if (e.key in this.keysReleaseTimes &&
+            time < this.keysReleaseTimes[e.key] + MAX_KEY_DELAY)
+            return
+        this.keysPressed[e.key] = true
 
         if (this.hasPressedKey) {
             SocketManager.instance.socket.emit('input', this.keys)
@@ -399,17 +408,10 @@ export default class Player {
             case 'e':
                 this.actionDown = false
                 break
-
-            // toggle fullscreen
-            case 'f':
-                GameManager.instance.toggleFullscreen()
-                break
-
-            // activate debug mode
-            case '`':
-                GameManager.instance.debug = !GameManager.instance.debug
-                break
         }
+
+        delete this.keysPressed[e.key]
+        this.keysReleaseTimes[e.key] = new Date().getTime()
 
         SocketManager.instance.socket.emit('input', this.keys)
     }
