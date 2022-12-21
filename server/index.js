@@ -32,6 +32,7 @@ const {
 } = require('../shared/constants')
 
 const { stepPhysics } = require('../shared/physics')
+const { Polygon, Vector2 } = require('../shared/collision')
 
 /// player data //////////////
 
@@ -68,7 +69,7 @@ function playerExists(socketId) {
 /// level data ///////////////
 
 class Level {
-    constructor(title, width, height, startX, startY, blocks) {
+    constructor(title, width, height, startX, startY, blocks, polygons) {
         this.title = title
 
         this.width = width
@@ -78,6 +79,11 @@ class Level {
         this.startY = startY
 
         this.blocks = blocks.map((b) => !!b)
+        this.polygons = polygons.map((polygon) => (
+            new Polygon(polygon.map((vertex) => (
+                new Vector2(vertex.x, vertex.y))
+            ))
+        ))
     }
 
     check(x, y) {
@@ -90,9 +96,9 @@ let level = null
 
 function loadLevel(name) {
     const data = fs.readFileSync(path.join(__dirname, '../public/maps/' + name))
-    const { title, width, height, startX, startY, blocks } = JSON.parse(data)
+    const { title, width, height, startX, startY, blocks, polygons } = JSON.parse(data)
 
-    level = new Level(title, width, height, startX, startY, blocks)
+    level = new Level(title, width, height, startX, startY, blocks, polygons)
 
     // move all players to starting location
     for (let id in players) {

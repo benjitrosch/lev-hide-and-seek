@@ -449,41 +449,12 @@ class AABB {
     public y: number
     public w: number
     public h: number
-
-    get top() {
-        return this.y
-    }
-
-    get bottom() {
-        return this.y + this.h
-    }
-
-    get left() {
-        return this.x
-    }
-
-    get right() {
-        return this.x + this.w
-    }
-
+    
     constructor(x: number, y: number, w: number, h: number) {
         this.x = x
         this.y = y
         this.w = w
         this.h = h
-    }
-
-    public check(aabb: AABB) {
-        return (
-            this.left < aabb.right &&
-            this.right > aabb.left &&
-            this.top < aabb.bottom &&
-            this.bottom > aabb.top
-        )
-    }
-    
-    public translate(x: number, y: number): AABB {
-        return new AABB(this.x + x, this.y + y, this.w, this.h)
     }
 }
 

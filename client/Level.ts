@@ -3,6 +3,12 @@ import {
     GAME_HEIGHT,
     TILE_SIZE,
 } from '../shared/constants'
+import {
+    Rectangle,
+    Polygon,
+    Vector2,
+    checkAABBs
+} from '../shared/collision'
 
 import { Asset, Sprite } from "./Assets"
 import Renderer from './Renderer'
@@ -15,6 +21,7 @@ type LevelData = {
     startX: number
     startY: number
     blocks: number[]
+    polygons: { x: number, y: number }[][]
 }
 
 export default class Level extends Asset {
@@ -35,6 +42,7 @@ export default class Level extends Asset {
     public startY: number = 0
 
     public blocks: boolean[] = []
+    public polygons: Polygon[]
 
     private sprite: Sprite
     public loaded: boolean = false
@@ -45,7 +53,7 @@ export default class Level extends Asset {
         fetch(this.filePath)
             .then((res) => res.json())
             .then((data: LevelData) => {
-                const { title, bg, width, height, startX, startY, blocks } = data
+                const { title, bg, width, height, startX, startY, blocks, polygons } = data
 
                 this.title = title
                 
@@ -56,6 +64,11 @@ export default class Level extends Asset {
                 this.startY = startY
         
                 this.blocks = blocks.map((b) => !!b)
+                this.polygons = polygons.map((polygon) => (
+                    new Polygon(polygon.map((vertex) => (
+                        new Vector2(vertex.x, vertex.y)
+                    )))
+                ))
 
                 this.sprite = new Sprite(bg)
                 this.loaded = true
@@ -79,43 +92,21 @@ export default class Level extends Asset {
             gfx.ctx.drawImage(this.sprite.image, xView, yView, w, h, 0, 0, w, h)
         }
         
-        // render individual blocks
+        // render individual polygons
         if (this.loaded)
         {
-            let w = GAME_WIDTH
-            let h = GAME_HEIGHT
-
-            if (this.width * TILE_SIZE - xView < w)
-                w = this.width * TILE_SIZE - xView
-            if (this.height * TILE_SIZE - yView < h)
-                h = this.height * TILE_SIZE - yView
-
-            const startX = Math.max(0, ~~(xView / TILE_SIZE))
-            const startY = Math.max(0, ~~(yView / TILE_SIZE))
-            
-            const endX = Math.min(this.rows, startX + w / TILE_SIZE + 1)
-            const endY = Math.min(this.cols, startY + h / TILE_SIZE + 1)
-
-            for (let y = startY; y < endY; y++) {
-                for (let x = startX; x < endX; x++) {
-                    const block = this.blocks[x + y * this.rows]
-
-                    if (block) {
-                        gfx.ctx.save()
-                        gfx.ctx.fillStyle = 'black'
-                        gfx.ctx.strokeStyle = 'black'
-                        gfx.ctx.lineWidth = 1
-                        gfx.ctx.beginPath()
-                        gfx.ctx.rect(
-                            x * TILE_SIZE - xView,
-                            y * TILE_SIZE - yView,
-                            1 * TILE_SIZE,
-                            1 * TILE_SIZE
-                        )
-                        gfx.ctx.fill()
-                        gfx.ctx.stroke()
-                        gfx.ctx.restore()
-                    }
+            const viewportAABB = new Rectangle(xView, yView, GAME_WIDTH, GAME_HEIGHT)
+            for (let i = 0; i < this.polygons.length; i++) {
+                const polygon = this.polygons[i]
+                if (checkAABBs(polygon.aabb, viewportAABB)) {
+                    gfx.ctx.fillStyle = '#0000ff33'
+                    gfx.ctx.beginPath()
+                    gfx.ctx.moveTo(polygon.vertices[0].x - xView, polygon.vertices[0].y - yView)
+                    polygon.vertices.slice(1).forEach((v) => {
+                        gfx.ctx.lineTo(v.x - xView, v.y - yView)
+                    })
+                    gfx.ctx.closePath()
+                    gfx.ctx.fill()
                 }
             }
         }
@@ -124,44 +115,29 @@ export default class Level extends Asset {
     public drawDebug(gfx: Renderer, xView: number, yView: number) {
         if (this.loaded)
         {
-            let w = GAME_WIDTH
-            let h = GAME_HEIGHT
-
-            if (this.width * TILE_SIZE - xView < w)
-                w = this.width * TILE_SIZE - xView
-            if (this.height * TILE_SIZE - yView < h)
-                h = this.height * TILE_SIZE - yView
-
-            const startX = Math.max(0, ~~(xView / TILE_SIZE))
-            const startY = Math.max(0, ~~(yView / TILE_SIZE))
-            
-            const endX = Math.min(this.rows, startX + w / TILE_SIZE + 1)
-            const endY = Math.min(this.cols, startY + h / TILE_SIZE + 1)
-
-            for (let y = startY; y < endY; y++) {
-                for (let x = startX; x < endX; x++) {
-                    const block = this.blocks[x + y * this.rows]
-
-                    if (block) {
-                        gfx.ctx.save()
-                        gfx.ctx.strokeStyle = "red"
-                        gfx.ctx.lineWidth = 1
-                        gfx.ctx.beginPath()
-                        gfx.ctx.rect(
-                            x * TILE_SIZE - xView,
-                            y * TILE_SIZE - yView,
-                            1 * TILE_SIZE,
-                            1 * TILE_SIZE
-                        )
-                        gfx.ctx.stroke()
-                        gfx.ctx.restore()
-                    }
+            const viewportAABB = new Rectangle(xView, yView, GAME_WIDTH, GAME_HEIGHT)
+            for (let i = 0; i < this.polygons.length; i++) {
+                const polygon = this.polygons[i]
+                if (checkAABBs(polygon.aabb, viewportAABB)) {
+                    gfx.emptyRectangle(
+                        polygon.aabb.x - xView,
+                        polygon.aabb.y - yView,
+                        polygon.aabb.width,
+                        polygon.aabb.height,
+                        2,
+                        'yellow'
+                    )
+                    gfx.ctx.strokeStyle = 'red'
+                    gfx.ctx.lineWidth = 2
+                    gfx.ctx.beginPath()
+                    gfx.ctx.moveTo(polygon.vertices[0].x - xView, polygon.vertices[0].y - yView)
+                    polygon.vertices.slice(1).forEach((v) => {
+                        gfx.ctx.lineTo(v.x - xView, v.y - yView)
+                    })
+                    gfx.ctx.closePath()
+                    gfx.ctx.stroke()
                 }
             }
         }  
-    }
-
-    public check(x: number, y: number) {
-        return this.blocks[x + y * this.rows]
     }
 }
