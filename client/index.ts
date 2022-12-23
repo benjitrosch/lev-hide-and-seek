@@ -11,6 +11,7 @@ import EntityManager from './EntityManager'
 import { Game, GameManager, GameState } from './Game'
 import Level from './Level'
 import { drawLights, drawLightsDebug, drawSpotlight } from './Lights'
+import MouseManager from './Mouse'
 import Renderer from './Renderer'
 import SocketManager from './SocketManager'
 
@@ -52,20 +53,8 @@ window.onload = function () {
 
         class Amogus extends Game {
             public start() {
-                GameManager.instance.canvas = canvas
-                document.addEventListener('keydown', function (e) {
-                    switch (e.key) {
-                        // toggle fullscreen
-                        case 'f':
-                            GameManager.instance.toggleFullscreen()
-                            break
-
-                        // activate debug mode
-                        case '`':
-                            GameManager.instance.debug = !GameManager.instance.debug
-                            break
-                    }
-                })
+                GameManager.instance.init(canvas)
+                MouseManager.instance.init(canvas)
 
                 SocketManager.instance.init(input.value, Number(hueSlider.value), Number(brightnessSlider.value))
 
@@ -231,6 +220,15 @@ window.onload = function () {
                 const posText = `x: ${Math.round(player.x)}, y: ${Math.round(player.y)}`
                 const { h: posH } = gfx.measureText(posText, 24)
                 gfx.text(posText, 8, socketH + gameH + roleH + posH, "white", "left", 24)
+
+                gfx.text(
+                    `(${MouseManager.instance.worldX.toFixed(0)}, ${MouseManager.instance.worldY.toFixed(0)})`,
+                    MouseManager.instance.x,
+                    MouseManager.instance.y,
+                    '#ffffffaa',
+                    'center',
+                    16
+                )
             }
         }
 

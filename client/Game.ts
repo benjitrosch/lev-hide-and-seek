@@ -71,15 +71,30 @@ export class GameManager {
     public debug: boolean = false
 
     // ref to canvas for fullscreen
-    private canvasRef: HTMLCanvasElement | null = null
-    public set canvas(c: HTMLCanvasElement) {
-        this.canvasRef = c
+    private canvas: HTMLCanvasElement
+
+    public init(canvas: HTMLCanvasElement) {
+        this.canvas = canvas
+
+        document.addEventListener('keydown', function(e) {
+            switch (e.key) {
+                // toggle fullscreen
+                case 'f':
+                    GameManager.instance.toggleFullscreen()
+                    break
+
+                // activate debug mode
+                case '`':
+                    GameManager.instance.debug = !GameManager.instance.debug
+                    break
+            }
+        })
     }
 
     public toggleFullscreen() {
         this.fullscreen = !this.fullscreen
 
-        if (this.fullscreen) this.canvasRef?.requestFullscreen()
+        if (this.fullscreen) this.canvas.requestFullscreen()
         else document.exitFullscreen()
     }
 }  
