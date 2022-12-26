@@ -1,8 +1,8 @@
 {
     "title": "test game area",
     "bg": "sprites/map.jpeg",
-    "width": 7680,
-    "height": 4320,
+    "width": 7833,
+    "height": 4524,
     "startX": 4096,
     "startY": 1360,
     "polygons": [

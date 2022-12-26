@@ -226,7 +226,7 @@ export default class Player {
                 // gfx.ctx.scale(-1, 1)
             }
 
-            gfx.ctx.filter = `hue-rotate(${this.hue}deg) brightness(${this.brightness})`
+            gfx.ctx.filter = `hue-rotate(${this.hue}deg) brightness(${this.brightness * 100}%)`
             
             gfx.ctx.drawImage(
                 sprite.image,

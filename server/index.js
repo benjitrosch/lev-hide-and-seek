@@ -1,6 +1,6 @@
 const express = require('express')
 const app = express()
-const fs = require('fs')
+const fs = require('fs').promises
 const path = require('path')
 const http = require('http')
 const server = http.createServer(app)
@@ -88,8 +88,8 @@ class Level {
 
 let level = null
 
-function loadLevel(name) {
-    const data = fs.readFileSync(path.join(__dirname, '../public/maps/' + name))
+async function loadLevel(name) {
+    const data = await fs.readFile(path.join(__dirname, '../public/maps/' + name))
     const { title, width, height, startX, startY, polygons } = JSON.parse(data)
 
     level = new Level(title, width, height, startX, startY, polygons)
@@ -179,11 +179,11 @@ io.on('connection', (socket) => {
     serverMessage(`user "${socket.id}" has connected`)
 
     /** new user joins the lobby, added to server players */
-    socket.on('join', (data) => {
+    socket.on('join', async (data) => {
         // if this is the first player to join,
         // start the server-side game loop
         if (!Object.keys(players).length) {
-            loadLevel("lobby.json")
+            await loadLevel("lobby.json")
             gameLoopInterval = setInterval(gameLoop, TIMESTEP)
         }
 
@@ -209,7 +209,7 @@ io.on('connection', (socket) => {
     })
 
     /** user leaves lobby, deleted from server players */
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
         if (playerExists(socket.id)) {
             delete players[socket.id]
             delete playersInputs[socket.id]
@@ -225,7 +225,7 @@ io.on('connection', (socket) => {
 
         // if no more players left
         if (!Object.keys(players).length)
-            resetServer()
+            await resetServer()
     })
 
     socket.on('input', (input) => {
@@ -273,7 +273,7 @@ io.on('connection', (socket) => {
 })
 
 /** start the game */
-function startGame() {
+async function startGame() {
     gameLoading = false
     gameStarted = true
     gameTime = TOTAL_GAME_TIME
@@ -288,7 +288,7 @@ function startGame() {
     }, 1000)
 
     // load into the new game level
-    loadLevel("game.json")
+    await loadLevel("game.json")
 
     // randomly choose a player to be the "seek" role
     // everyone else becomes "hide" by default
@@ -318,7 +318,7 @@ function endGame(won) {
     serverMessage("game has ended")
 }
 
-function restartLobby() {
+async function restartLobby() {
     gameLoading = false
 
     for (let id in players) {
@@ -326,7 +326,7 @@ function restartLobby() {
         players[id].alive = true
     }
 
-    loadLevel("lobby.json")
+    await loadLevel("lobby.json")
 
     io.sockets.emit('gameRestart')
     io.sockets.emit('updateLobby', players)
@@ -334,12 +334,12 @@ function restartLobby() {
     serverMessage("lobby restarting")
 }
 
-function resetServer() {
+async function resetServer() {
     Object.keys(players).forEach((key) => delete players[key])
     Object.keys(playersInputs).forEach((key) => delete playersInputs[key])
     Object.keys(playersPositions).forEach((key) => delete playersPositions[key])
 
-    loadLevel("lobby.json")
+    await loadLevel("lobby.json")
 
     gameStarted = false
     gameLoading = false
