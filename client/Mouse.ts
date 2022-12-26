@@ -1,4 +1,5 @@
 import Camera from "./Camera"
+import { GameManager } from "./Game"
 
 export default class MouseManager {
     private static _instance: MouseManager
@@ -6,12 +7,10 @@ export default class MouseManager {
         return this._instance || (this._instance = new this())
     }
 
-    // ref to canvas for measuring
-    // mouse position against bounding rect
-    private canvas: HTMLCanvasElement
-
     public x: number = 0
     public y: number = 0
+
+    public down: boolean = false
 
     public get worldX() {
         return this.x + Camera.instance.xView
@@ -21,26 +20,44 @@ export default class MouseManager {
         return this.y + Camera.instance.yView
     }
     
-    public init(canvas: HTMLCanvasElement) {
-        this.canvas = canvas
-
+    public init() {
         document.addEventListener('mousemove', (e) => { this.mouseMove(e) })
         document.addEventListener('mousedown', (e) => { this.mouseDown(e) })
         document.addEventListener('mouseup', (e) => { this.mouseUp(e) })
+        document.addEventListener('touchmove', (e) => { this.touchDown(e) })
+        document.addEventListener('touchstart', (e) => { this.touchDown(e) })
+        document.addEventListener('touchend', (e) => { this.touchUp(e) })
     }
 
     private mouseMove(e: MouseEvent) {
-        const rect = this.canvas.getBoundingClientRect()
-
-        this.x = (e.clientX - rect.left) / (rect.right - rect.left) * this.canvas.width
-        this.y =( e.clientY - rect.top) / (rect.bottom - rect.top) * this.canvas.height
+        const { x, y } = GameManager.instance.screenToWorld(e.clientX, e.clientY)
+        this.x = x
+        this.y = y
     }
 
     private mouseDown(e: MouseEvent) {
-
+        this.down = true
     }
 
     private mouseUp(e: MouseEvent) {
+        this.down = false
+    }
 
+    private touchDown(e: TouchEvent) {
+        this.down = true
+
+        if (e.touches.length) {
+            const { clientX, clientY } = e.touches[e.touches.length - 1]
+            const { x, y } = GameManager.instance.screenToWorld(clientX, clientY)
+            this.x = x
+            this.y = y
+        }
+    }
+
+    private touchUp(e: TouchEvent) {
+        this.down = false
+        
+        this.x = 0
+        this.y = 0
     }
 }

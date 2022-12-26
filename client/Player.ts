@@ -28,6 +28,8 @@ import EntityManager from './EntityManager'
 import { GameManager } from './Game'
 import Renderer from './Renderer'
 import SocketManager from './SocketManager'
+import Camera from './Camera'
+import MouseManager from './Mouse'
 
 const MAX_KEY_DELAY = 100
 
@@ -54,8 +56,6 @@ export default class Player {
     // animation
     private animator: Animator
     private facing: boolean = true
-    private useSprite: Sprite
-    private killSprite: Sprite
 
     // transform
     public x: number
@@ -79,6 +79,28 @@ export default class Player {
     public target: Player | null = null
     public cooldown: number = KILL_COOLDOWN
     private cooldownInterval: ReturnType<typeof setInterval>
+    private useSprite: Sprite
+    private killSprite: Sprite
+    private startSprite: Sprite
+    
+    private get interactSprite() {
+        let sprite = null
+        switch (this.role) {
+            case ROLE_NONE:
+            case ROLE_READY:
+                sprite = this.startSprite
+                break
+
+            case ROLE_HIDE:
+                sprite = this.useSprite
+                break
+            
+            case ROLE_SEEK:
+                sprite = this.killSprite
+                break
+        }
+        return sprite
+    }
 
     constructor(username: string, hue: number, brightness: number, role: number, socketId: string, player: boolean, alive: boolean) {
         this.x = 0
@@ -97,8 +119,18 @@ export default class Player {
         this.alive = alive
 
         if (this.player) {
+            // keyboard events (desktop)
             document.addEventListener('keydown', (e) => { this.keyDown(e) })
             document.addEventListener('keyup', (e) => { this.keyUp(e) })
+
+            // touch events (mobile)
+            document.addEventListener('touchstart', (e) => { this.touchDown(e) }, { passive: false })
+            document.addEventListener('touchmove', (e) => { this.touchDown(e) }, { passive: false })
+            document.addEventListener('touchend', (e) => { this.touchUp(e) })
+
+            // interact button events (desktop and mobile)
+            document.addEventListener('mousedown', () => { this.clickInteract() })
+            document.addEventListener('touchstart', () => { this.clickInteract() })
         }
 
         this.animator = new Animator("idle", {
@@ -139,6 +171,7 @@ export default class Player {
 
         this.useSprite = new Sprite("sprites/use.png")
         this.killSprite = new Sprite("sprites/kill.png")
+        this.startSprite = new Sprite("sprites/start.png")
     }
     
     public update(dt: number) {
@@ -301,34 +334,56 @@ export default class Player {
     }
 
     public drawUI(gfx: Renderer) {
-        if (!this.useSprite.loaded || !this.killSprite.loaded) return
-
-        switch (this.role) {
-            case ROLE_HIDE:
-                break
+        if (!this.useSprite.loaded ||
+            !this.killSprite.loaded ||
+            !this.startSprite.loaded)
+            return
             
-            case ROLE_SEEK:
-                gfx.ctx.save()
-                gfx.ctx.globalAlpha = this.cooldown > 0 ? 0.5 : 1
-                gfx.ctx.drawImage(
-                    this.killSprite.image,
-                    GAME_WIDTH - this.killSprite.image.width - 8,
-                    GAME_HEIGHT - this.killSprite.image.height - 8
-                )
-                gfx.ctx.restore()
+        const sprite = this.interactSprite
+        if (!sprite) return
+            
+        const { x: mX, y: mY } = MouseManager.instance
 
-                if (this.cooldown > 0)
-                    gfx.textOutline(
-                        this.cooldown.toFixed(0).toString(),
-                        GAME_WIDTH - this.killSprite.image.width / 2 - 8,
-                        GAME_HEIGHT - this.killSprite.image.height / 2 - 8,
-                        "white",
-                        "black",
-                        "center",
-                        48,
-                        4
-                    )
-                break
+        const x = GAME_WIDTH - sprite.image.width - 8
+        const y = GAME_HEIGHT - this.startSprite.image.height - 8
+
+        const hovered = (x <= mX &&
+                        x + sprite.image.width >= mX &&
+                        y <= mY &&
+                        y + sprite.image.height >= mY)
+
+        gfx.ctx.save()
+
+        if (hovered) {
+            if (this.role === ROLE_SEEK && this.cooldown > 0) {
+                gfx.ctx.canvas.style.cursor = "not-allowed"
+            } else {
+                gfx.ctx.filter = `brightness(${MouseManager.instance.down ? 0.75 : 1.25})`
+                gfx.ctx.canvas.style.cursor = "pointer"
+            }
+        } else {
+            gfx.ctx.canvas.style.cursor = "auto"
+        }
+
+        if (this.role === ROLE_SEEK) {
+            gfx.ctx.globalAlpha = this.cooldown > 0 ? 0.5 : 1
+        }
+
+        gfx.ctx.drawImage(sprite.image, x, y)
+        gfx.ctx.restore()
+
+        if (this.role === ROLE_SEEK) {
+            gfx.ctx.save()
+            if (this.cooldown > 0)
+                gfx.textOutline(this.cooldown.toFixed(0).toString(),
+                    GAME_WIDTH - this.killSprite.image.width / 2 - 8,
+                    GAME_HEIGHT - this.killSprite.image.height / 2 - 8,
+                    "white",
+                    "black",
+                    "center",
+                    48,
+                    4)
+            gfx.ctx.restore()
         }
     }
 
@@ -414,6 +469,81 @@ export default class Player {
         this.keysReleaseTimes[e.key] = new Date().getTime()
 
         SocketManager.instance.socket.emit('input', this.keys)
+    }
+
+    private touchDown(e: TouchEvent) {
+        e.preventDefault()
+
+        const { worldX: x, worldY: y } = MouseManager.instance
+
+        if (Math.abs(x - this.center.x) > PLAYER_WIDTH) {
+            if (x < this.center.x) {
+                if (!(this.keys & INPUT_LEFT)) this.hasPressedKey = true
+                this.keys |= INPUT_LEFT
+                this.keys &= ~INPUT_RIGHT
+            } else if (x > this.center.x) {
+                if (!(this.keys & INPUT_RIGHT)) this.hasPressedKey = true
+                this.keys &= ~INPUT_LEFT
+                this.keys |= INPUT_RIGHT
+            }
+        } else {
+            if ((this.keys & INPUT_LEFT) || (this.keys & INPUT_RIGHT))
+                this.hasPressedKey = true
+            this.keys &= ~INPUT_LEFT
+            this.keys &= ~INPUT_RIGHT
+        }
+
+        if (Math.abs(y - this.center.y) > PLAYER_HEIGHT) {
+            if (y < this.center.y) {
+                if (!(this.keys & INPUT_UP)) this.hasPressedKey = true
+                this.keys |= INPUT_UP
+                this.keys &= ~INPUT_DOWN
+            } else if (y > this.center.y) {
+                if (!(this.keys & INPUT_DOWN)) this.hasPressedKey = true
+                this.keys &= ~INPUT_UP
+                this.keys |= INPUT_DOWN
+            }
+        } else {
+            if ((this.keys & INPUT_UP) || (this.keys & INPUT_DOWN))
+                this.hasPressedKey = true
+            this.keys &= ~INPUT_UP
+            this.keys &= ~INPUT_DOWN
+        }
+
+        if (this.hasPressedKey) {
+            SocketManager.instance.socket.emit('input', this.keys)
+            this.hasPressedKey = false
+        }
+    }
+
+    private touchUp(e: TouchEvent) {
+        if (!e.touches.length) {
+            this.keys &= ~INPUT_LEFT
+            this.keys &= ~INPUT_RIGHT
+            this.keys &= ~INPUT_UP
+            this.keys &= ~INPUT_DOWN
+
+            SocketManager.instance.socket.emit('input', this.keys)
+        }
+    }
+
+    public clickInteract() {
+        const sprite = this.interactSprite
+        if (!sprite) return
+
+        const { x: mX, y: mY, down } = MouseManager.instance
+        if (!down) return
+
+        const x = GAME_WIDTH - sprite.image.width - 8
+        const y = GAME_HEIGHT - this.startSprite.image.height - 8
+        
+        const hovered = (x <= mX &&
+            x + sprite.image.width >= mX &&
+            y <= mY &&
+            y + sprite.image.height >= mY)
+        if (!hovered) return
+
+        this.hasPressedAction = true
     }
 
     public setCooldownInterval() {

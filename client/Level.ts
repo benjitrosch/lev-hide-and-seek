@@ -1,7 +1,6 @@
 import {
     GAME_WIDTH,
     GAME_HEIGHT,
-    TILE_SIZE,
 } from '../shared/constants'
 import {
     Rectangle,
@@ -28,14 +27,6 @@ export default class Level extends Asset {
 
     public width: number = 0
     public height: number = 0
-
-    public get rows() {
-        return ~~(this.width / TILE_SIZE)
-    }
-
-    public get cols() {
-       return (this.height / TILE_SIZE)
-    }
 
     public startX: number = 0
     public startY: number = 0

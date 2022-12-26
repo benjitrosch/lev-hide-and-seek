@@ -1,6 +1,5 @@
 const GAME_WIDTH = 1280
 const GAME_HEIGHT = 720
-const TILE_SIZE = 160
 const ANIM_FRAMERATE = 0.041
 const INTERACT_DISTANCE = 256
 const PLAYER_SPEED = 512  
@@ -15,7 +14,6 @@ const KILL_COOLDOWN = 30
 module.exports = {
     GAME_WIDTH,
     GAME_HEIGHT,
-    TILE_SIZE,
     ANIM_FRAMERATE,
     INTERACT_DISTANCE,
     PLAYER_SPEED,

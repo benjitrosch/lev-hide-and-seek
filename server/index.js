@@ -26,10 +26,7 @@ const {
     ROLE_SPEC,
 } = require('../shared/enums')
 
-const {
-    TILE_SIZE,
-    TOTAL_GAME_TIME,
-} = require('../shared/constants')
+const { TOTAL_GAME_TIME } = require('../shared/constants')
 
 const { stepPhysics } = require('../shared/physics')
 const { Polygon, Vector2 } = require('../shared/collision')

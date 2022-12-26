@@ -97,4 +97,12 @@ export class GameManager {
         if (this.fullscreen) this.canvas.requestFullscreen()
         else document.exitFullscreen()
     }
+
+    public screenToWorld(x: number, y: number) {
+        const rect = this.canvas.getBoundingClientRect()
+        return {
+            x: (x - rect.left) / (rect.right - rect.left) * this.canvas.width,
+            y: (y - rect.top) / (rect.bottom - rect.top) * this.canvas.height
+        }
+    }
 }  

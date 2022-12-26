@@ -54,7 +54,7 @@ window.onload = function () {
         class Amogus extends Game {
             public start() {
                 GameManager.instance.init(canvas)
-                MouseManager.instance.init(canvas)
+                MouseManager.instance.init()
 
                 SocketManager.instance.init(input.value, Number(hueSlider.value), Number(brightnessSlider.value))
 
